@@ -50,4 +50,11 @@
             AND NOW() > c.end_time
         </if>
     </select>
+    <update id="decreaseCouponStock">
+        UPDATE sms_coupon
+        SET count = count - 1,
+            receive_count = IFNULL(receive_count, 0) + 1
+        WHERE id = #{couponId}
+          AND count &gt; 0
+    </update>
 </mapper>

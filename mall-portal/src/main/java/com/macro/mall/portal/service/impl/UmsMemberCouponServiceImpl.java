@@ -2,6 +2,7 @@ package com.macro.mall.portal.service.impl;
 
 import cn.hutool.core.collection.CollUtil;
 import com.macro.mall.common.exception.Asserts;
+import com.macro.mall.common.service.RedisService;
 import com.macro.mall.mapper.*;
 import com.macro.mall.model.*;
 import com.macro.mall.portal.dao.SmsCouponHistoryDao;
@@ -10,7 +11,10 @@ import com.macro.mall.portal.domain.SmsCouponHistoryDetail;
 import com.macro.mall.portal.service.UmsMemberCouponService;
 import com.macro.mall.portal.service.UmsMemberService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -25,6 +29,16 @@ import java.util.stream.Collectors;
  */
 @Service
 public class UmsMemberCouponServiceImpl implements UmsMemberCouponService {
+    /**
+     * 优惠券领取防重锁过期时间（秒），防止首次请求异常退出后锁无法释放
+     */
+    private static final long COUPON_RECEIVE_LOCK_SECONDS = 10;
+    @Value("${redis.database}")
+    private String REDIS_DATABASE;
+    @Value("${redis.key.couponReceive}")
+    private String REDIS_KEY_COUPON_RECEIVE;
+    @Autowired
+    private RedisService redisService;
     @Autowired
     private UmsMemberService memberService;
     @Autowired
@@ -42,41 +56,64 @@ public class UmsMemberCouponServiceImpl implements UmsMemberCouponService {
     @Override
     public void add(Long couponId) {
         UmsMember currentMember = memberService.getCurrentMember();
-        //获取优惠券信息，判断数量
-        SmsCoupon coupon = couponMapper.selectByPrimaryKey(couponId);
-        if(coupon==null){
-            Asserts.fail("优惠券不存在");
+        //防重锁：同一会员对同一张优惠券的领取串行化，避免并发超领和重复点击
+        String lockKey = REDIS_DATABASE + ":" + REDIS_KEY_COUPON_RECEIVE + ":" + couponId + ":" + currentMember.getId();
+        if (!Boolean.TRUE.equals(redisService.setIfAbsent(lockKey, "1", COUPON_RECEIVE_LOCK_SECONDS))) {
+            Asserts.fail("领取中，请勿重复操作！");
         }
-        if(coupon.getCount()<=0){
-            Asserts.fail("优惠券已经领完了");
+        try {
+            //获取优惠券信息，判断领取时间
+            SmsCoupon coupon = couponMapper.selectByPrimaryKey(couponId);
+            if(coupon==null){
+                Asserts.fail("优惠券不存在");
+            }
+            Date now = new Date();
+            if(now.before(coupon.getEnableTime())){
+                Asserts.fail("优惠券还没到领取时间");
+            }
+            //判断用户领取的优惠券数量是否超过限制
+            SmsCouponHistoryExample couponHistoryExample = new SmsCouponHistoryExample();
+            couponHistoryExample.createCriteria().andCouponIdEqualTo(couponId).andMemberIdEqualTo(currentMember.getId());
+            long count = couponHistoryMapper.countByExample(couponHistoryExample);
+            if(count>=coupon.getPerLimit()){
+                Asserts.fail("您已经领取过该优惠券");
+            }
+            //原子扣减库存并累加领取数量，影响行数为0说明已领完
+            if(couponHistoryDao.decreaseCouponStock(couponId)==0){
+                Asserts.fail("优惠券已经领完了");
+            }
+            //生成领取优惠券历史
+            SmsCouponHistory couponHistory = new SmsCouponHistory();
+            couponHistory.setCouponId(couponId);
+            couponHistory.setCouponCode(generateCouponCode(currentMember.getId()));
+            couponHistory.setCreateTime(now);
+            couponHistory.setMemberId(currentMember.getId());
+            couponHistory.setMemberNickname(currentMember.getNickname());
+            //主动领取
+            couponHistory.setGetType(1);
+            //未使用
+            couponHistory.setUseStatus(0);
+            couponHistoryMapper.insert(couponHistory);
+        } finally {
+            //事务结束后再释放锁，避免其他请求读到未提交的领取记录
+            releaseLockAfterCompletion(lockKey);
         }
-        Date now = new Date();
-        if(now.before(coupon.getEnableTime())){
-            Asserts.fail("优惠券还没到领取时间");
+    }
+
+    /**
+     * 在当前事务结束后释放Redis锁；无事务时立即释放
+     */
+    private void releaseLockAfterCompletion(String lockKey) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    redisService.del(lockKey);
+                }
+            });
+        } else {
+            redisService.del(lockKey);
         }
-        //判断用户领取的优惠券数量是否超过限制
-        SmsCouponHistoryExample couponHistoryExample = new SmsCouponHistoryExample();
-        couponHistoryExample.createCriteria().andCouponIdEqualTo(couponId).andMemberIdEqualTo(currentMember.getId());
-        long count = couponHistoryMapper.countByExample(couponHistoryExample);
-        if(count>=coupon.getPerLimit()){
-            Asserts.fail("您已经领取过该优惠券");
-        }
-        //生成领取优惠券历史
-        SmsCouponHistory couponHistory = new SmsCouponHistory();
-        couponHistory.setCouponId(couponId);
-        couponHistory.setCouponCode(generateCouponCode(currentMember.getId()));
-        couponHistory.setCreateTime(now);
-        couponHistory.setMemberId(currentMember.getId());
-        couponHistory.setMemberNickname(currentMember.getNickname());
-        //主动领取
-        couponHistory.setGetType(1);
-        //未使用
-        couponHistory.setUseStatus(0);
-        couponHistoryMapper.insert(couponHistory);
-        //修改优惠券表的数量、领取数量
-        coupon.setCount(coupon.getCount()-1);
-        coupon.setReceiveCount(coupon.getReceiveCount()==null?1:coupon.getReceiveCount()+1);
-        couponMapper.updateByPrimaryKey(coupon);
     }
 
     /**

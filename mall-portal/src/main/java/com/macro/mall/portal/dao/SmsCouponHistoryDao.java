@@ -20,4 +20,10 @@ public interface SmsCouponHistoryDao {
      * 获取指定会员优惠券列表
      */
     List<SmsCoupon> getCouponList(@Param("memberId") Long memberId, @Param("useStatus")Integer useStatus);
+
+    /**
+     * 原子扣减优惠券库存并累加领取数量
+     * @return 影响行数，0表示优惠券已领完
+     */
+    int decreaseCouponStock(@Param("couponId") Long couponId);
 }
