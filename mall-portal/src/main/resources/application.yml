@@ -61,10 +61,12 @@ redis:
     orderId: 'oms:orderId'
     orderSubmit: 'oms:orderSubmit'
     couponReceive: 'ums:couponReceive'
+    homeContent: 'home:content'
     member: 'ums:member'
   expire:
     authCode: 90 # 验证码超期时间
     common: 86400 # 24小时
+    home: 300 # 首页内容缓存时间（秒）
 
 mongo:
   insert:

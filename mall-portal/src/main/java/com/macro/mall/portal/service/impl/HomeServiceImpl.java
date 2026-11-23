@@ -1,6 +1,7 @@
 package com.macro.mall.portal.service.impl;
 
 import com.github.pagehelper.PageHelper;
+import com.macro.mall.common.service.RedisService;
 import com.macro.mall.mapper.*;
 import com.macro.mall.model.*;
 import com.macro.mall.portal.dao.HomeDao;
@@ -10,6 +11,7 @@ import com.macro.mall.portal.domain.HomeFlashPromotion;
 import com.macro.mall.portal.service.HomeService;
 import com.macro.mall.portal.util.DateUtil;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 
@@ -22,6 +24,23 @@ import java.util.List;
  */
 @Service
 public class HomeServiceImpl implements HomeService {
+    /**
+     * 缓存重建锁过期时间（秒）
+     */
+    private static final long HOME_CONTENT_REBUILD_LOCK_SECONDS = 10;
+    /**
+     * 缓存重建时其他请求的等待次数与间隔（毫秒）
+     */
+    private static final int HOME_CONTENT_WAIT_TIMES = 10;
+    private static final long HOME_CONTENT_WAIT_INTERVAL_MILLIS = 50;
+    @Value("${redis.database}")
+    private String REDIS_DATABASE;
+    @Value("${redis.key.homeContent}")
+    private String REDIS_KEY_HOME_CONTENT;
+    @Value("${redis.expire.home}")
+    private long HOME_CONTENT_EXPIRE_SECONDS;
+    @Autowired
+    private RedisService redisService;
     @Autowired
     private SmsHomeAdvertiseMapper advertiseMapper;
     @Autowired
@@ -39,7 +58,39 @@ public class HomeServiceImpl implements HomeService {
 
     @Override
     public HomeContentResult content() {
-        // TODO 可以添加缓存
+        String cacheKey = REDIS_DATABASE + ":" + REDIS_KEY_HOME_CONTENT;
+        Object cachedValue = redisService.get(cacheKey);
+        if (cachedValue instanceof HomeContentResult) {
+            return (HomeContentResult) cachedValue;
+        }
+        //缓存未命中，用互斥锁保证只有一个请求回源重建，避免缓存击穿
+        String lockKey = cacheKey + ":rebuild";
+        if (Boolean.TRUE.equals(redisService.setIfAbsent(lockKey, "1", HOME_CONTENT_REBUILD_LOCK_SECONDS))) {
+            try {
+                HomeContentResult result = buildHomeContent();
+                redisService.set(cacheKey, result, HOME_CONTENT_EXPIRE_SECONDS);
+                return result;
+            } finally {
+                redisService.del(lockKey);
+            }
+        }
+        //未抢到锁：等待重建结果，超时后降级直接查库
+        for (int i = 0; i < HOME_CONTENT_WAIT_TIMES; i++) {
+            try {
+                Thread.sleep(HOME_CONTENT_WAIT_INTERVAL_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            cachedValue = redisService.get(cacheKey);
+            if (cachedValue instanceof HomeContentResult) {
+                return (HomeContentResult) cachedValue;
+            }
+        }
+        return buildHomeContent();
+    }
+
+    private HomeContentResult buildHomeContent() {
         HomeContentResult result = new HomeContentResult();
         //获取首页广告
         result.setAdvertiseList(getHomeAdvertiseList());
