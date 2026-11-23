@@ -27,6 +27,10 @@ public class UmsMemberCacheServiceImpl implements UmsMemberCacheService {
     private Long REDIS_EXPIRE_AUTH_CODE;
     @Value("${redis.key.member}")
     private String REDIS_KEY_MEMBER;
+    @Value("${redis.key.memberNotExist}")
+    private String REDIS_KEY_MEMBER_NOT_EXIST;
+    @Value("${redis.expire.memberNotExist}")
+    private Long REDIS_EXPIRE_MEMBER_NOT_EXIST;
     @Value("${redis.key.authCode}")
     private String REDIS_KEY_AUTH_CODE;
 
@@ -49,6 +53,26 @@ public class UmsMemberCacheServiceImpl implements UmsMemberCacheService {
     public void setMember(UmsMember member) {
         String key = REDIS_DATABASE + ":" + REDIS_KEY_MEMBER + ":" + member.getUsername();
         redisService.set(key, member, REDIS_EXPIRE);
+        //会员已存在，清除可能残留的不存在标记
+        delMemberNotExist(member.getUsername());
+    }
+
+    @Override
+    public Boolean isMemberNotExist(String username) {
+        String key = REDIS_DATABASE + ":" + REDIS_KEY_MEMBER_NOT_EXIST + ":" + username;
+        return Boolean.TRUE.equals(redisService.hasKey(key));
+    }
+
+    @Override
+    public void setMemberNotExist(String username) {
+        String key = REDIS_DATABASE + ":" + REDIS_KEY_MEMBER_NOT_EXIST + ":" + username;
+        redisService.set(key, "1", REDIS_EXPIRE_MEMBER_NOT_EXIST);
+    }
+
+    @Override
+    public void delMemberNotExist(String username) {
+        String key = REDIS_DATABASE + ":" + REDIS_KEY_MEMBER_NOT_EXIST + ":" + username;
+        redisService.del(key);
     }
 
     @CacheException

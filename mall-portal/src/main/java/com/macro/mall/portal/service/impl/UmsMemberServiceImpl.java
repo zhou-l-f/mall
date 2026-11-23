@@ -58,6 +58,10 @@ public class UmsMemberServiceImpl implements UmsMemberService {
     public UmsMember getByUsername(String username) {
         UmsMember member = memberCacheService.getMember(username);
         if(member!=null) return member;
+        //该用户名已被标记为不存在，短时间内直接返回，避免缓存穿透
+        if(Boolean.TRUE.equals(memberCacheService.isMemberNotExist(username))){
+            return null;
+        }
         UmsMemberExample example = new UmsMemberExample();
         example.createCriteria().andUsernameEqualTo(username);
         List<UmsMember> memberList = memberMapper.selectByExample(example);
@@ -66,6 +70,8 @@ public class UmsMemberServiceImpl implements UmsMemberService {
             memberCacheService.setMember(member);
             return member;
         }
+        //缓存不存在标记，防止不存在的热点账号持续打DB
+        memberCacheService.setMemberNotExist(username);
         return null;
     }
 
@@ -104,6 +110,8 @@ public class UmsMemberServiceImpl implements UmsMemberService {
             umsMember.setMemberLevelId(memberLevelList.get(0).getId());
         }
         memberMapper.insert(umsMember);
+        //清除可能残留的不存在标记，保证注册后可立即登录
+        memberCacheService.delMemberNotExist(username);
         umsMember.setPassword(null);
     }
 

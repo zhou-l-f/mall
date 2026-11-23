@@ -23,6 +23,21 @@ public interface UmsMemberCacheService {
     void setMember(UmsMember member);
 
     /**
+     * 判断该用户名是否已被标记为不存在（用于防止缓存穿透）
+     */
+    Boolean isMemberNotExist(String username);
+
+    /**
+     * 标记会员用户名不存在，短时间内拦截重复查询
+     */
+    void setMemberNotExist(String username);
+
+    /**
+     * 清除会员用户名不存在标记
+     */
+    void delMemberNotExist(String username);
+
+    /**
      * 设置验证码
      */
     void setAuthCode(String telephone, String authCode);

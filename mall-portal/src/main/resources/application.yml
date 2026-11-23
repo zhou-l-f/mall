@@ -62,11 +62,13 @@ redis:
     orderSubmit: 'oms:orderSubmit'
     couponReceive: 'ums:couponReceive'
     homeContent: 'home:content'
+    memberNotExist: 'ums:memberNotExist'
     member: 'ums:member'
   expire:
     authCode: 90 # 验证码超期时间
     common: 86400 # 24小时
     home: 300 # 首页内容缓存时间（秒）
+    memberNotExist: 60 # 不存在账号的空值缓存时间（秒）
 
 mongo:
   insert:
