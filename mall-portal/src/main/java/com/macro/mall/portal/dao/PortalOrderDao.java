@@ -31,13 +31,21 @@ public interface PortalOrderDao {
     /**
      * 获取超时订单
      * @param minute 超时时间（分）
+     * @param limit 单批最大订单数
      */
-    List<OmsOrderDetail> getTimeOutOrders(@Param("minute") Integer minute);
+    List<OmsOrderDetail> getTimeOutOrders(@Param("minute") Integer minute, @Param("limit") Integer limit);
 
     /**
-     * 批量修改订单状态
+     * 原子将未支付订单更新为已支付
+     * @return 影响行数，0表示订单不存在或已支付/已关闭
      */
-    int updateOrderStatus(@Param("ids") List<Long> ids,@Param("status") Integer status);
+    int updateOrderStatusToPaid(@Param("orderId") Long orderId, @Param("payType") Integer payType);
+
+    /**
+     * 原子将未支付订单更新为已关闭
+     * @return 影响行数，0表示订单不存在或已支付/已关闭
+     */
+    int updateOrderStatusToCanceled(@Param("orderId") Long orderId);
 
     /**
      * 解除取消订单的库存锁定
