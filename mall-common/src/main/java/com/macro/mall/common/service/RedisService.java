@@ -16,6 +16,13 @@ public interface RedisService {
     void set(String key, Object value, long time);
 
     /**
+     * 仅当key不存在时保存属性（SETNX），常用于防重/分布式锁
+     *
+     * @return true表示设置成功（此前不存在），false表示key已存在
+     */
+    Boolean setIfAbsent(String key, Object value, long time);
+
+    /**
      * 保存属性
      */
     void set(String key, Object value);

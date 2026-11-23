@@ -59,6 +59,7 @@ redis:
   key:
     authCode: 'ums:authCode'
     orderId: 'oms:orderId'
+    orderSubmit: 'oms:orderSubmit'
     member: 'ums:member'
   expire:
     authCode: 90 # 验证码超期时间

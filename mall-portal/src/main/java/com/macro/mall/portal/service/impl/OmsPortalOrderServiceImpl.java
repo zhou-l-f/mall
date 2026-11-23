@@ -17,6 +17,8 @@ import com.macro.mall.portal.service.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
@@ -53,6 +55,25 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     private RedisService redisService;
     @Value("${redis.key.orderId}")
     private String REDIS_KEY_ORDER_ID;
+    @Value("${redis.key.orderSubmit}")
+    private String REDIS_KEY_ORDER_SUBMIT;
+    /**
+     * 下单处理中标记，与订单ID共同存于同一个幂等key
+     */
+    private static final String ORDER_SUBMIT_PROCESSING = "processing";
+    /**
+     * 下单处理中标记的过期时间（秒），防止首次请求异常退出后锁无法释放
+     */
+    private static final long ORDER_SUBMIT_LOCK_SECONDS = 10;
+    /**
+     * 订单ID缓存时间（秒），对齐未支付订单的自动取消时间，期间重复请求返回同一笔订单
+     */
+    private static final long ORDER_SUBMIT_RESULT_SECONDS = 3600;
+    /**
+     * 重复请求等待首次请求提交结果的轮询次数与间隔（毫秒）
+     */
+    private static final int ORDER_SUBMIT_WAIT_TIMES = 20;
+    private static final long ORDER_SUBMIT_WAIT_INTERVAL_MILLIS = 50;
     @Value("${redis.database}")
     private String REDIS_DATABASE;
     @Autowired
@@ -90,14 +111,121 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
 
     @Override
     public Map<String, Object> generateOrder(OrderParam orderParam) {
-        List<OmsOrderItem> orderItemList = new ArrayList<>();
         //校验收货地址
         if(orderParam.getMemberReceiveAddressId()==null){
             Asserts.fail("请选择收货地址！");
         }
-        //获取购物车及优惠信息
+        //获取当前会员
         UmsMember currentMember = memberService.getCurrentMember();
+        //下单幂等控制：同一会员的同一批购物车只生成一笔订单，重复请求返回首次生成的订单
+        String submitKey = buildOrderSubmitKey(currentMember.getId(), orderParam.getCartIds());
+        if (tryAcquireSubmitKey(submitKey)) {
+            return createOrderAndCacheResult(orderParam, currentMember, submitKey);
+        }
+        //重复请求：等待首次请求提交后写入的订单ID
+        Long orderId = waitForOrderId(submitKey);
+        if (orderId != null) {
+            return buildOrderResult(orderId);
+        }
+        //首次请求失败会释放key，此时允许当前请求重新尝试下单
+        if (!redisService.hasKey(submitKey) && tryAcquireSubmitKey(submitKey)) {
+            return createOrderAndCacheResult(orderParam, currentMember, submitKey);
+        }
+        Asserts.fail("订单正在处理中，请稍后重试！");
+        return null;
+    }
+
+    /**
+     * 抢占下单幂等key，成功表示当前请求是首次请求
+     */
+    private boolean tryAcquireSubmitKey(String submitKey) {
+        return Boolean.TRUE.equals(redisService.setIfAbsent(submitKey, ORDER_SUBMIT_PROCESSING, ORDER_SUBMIT_LOCK_SECONDS));
+    }
+
+    /**
+     * 首次请求执行下单，事务提交后再缓存订单ID供重复请求复用
+     */
+    private Map<String, Object> createOrderAndCacheResult(OrderParam orderParam, UmsMember currentMember, String submitKey) {
+        try {
+            Map<String, Object> result = doGenerateOrder(orderParam, currentMember);
+            OmsOrder order = (OmsOrder) result.get("order");
+            cacheOrderIdAfterCommit(submitKey, order.getId());
+            return result;
+        } catch (RuntimeException e) {
+            //下单失败时释放幂等key，允许重试
+            redisService.del(submitKey);
+            throw e;
+        }
+    }
+
+    /**
+     * 订单ID必须在事务提交后写入Redis，避免重复请求查到未提交的订单
+     */
+    private void cacheOrderIdAfterCommit(String submitKey, Long orderId) {
+        String value = String.valueOf(orderId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    redisService.set(submitKey, value, ORDER_SUBMIT_RESULT_SECONDS);
+                }
+            });
+        } else {
+            redisService.set(submitKey, value, ORDER_SUBMIT_RESULT_SECONDS);
+        }
+    }
+
+    /**
+     * 短轮询等待首次请求写入订单ID；key不存在或超时返回null
+     */
+    private Long waitForOrderId(String submitKey) {
+        for (int i = 0; i < ORDER_SUBMIT_WAIT_TIMES; i++) {
+            Object value = redisService.get(submitKey);
+            if (value == null) {
+                return null;
+            }
+            String valueStr = String.valueOf(value);
+            if (!ORDER_SUBMIT_PROCESSING.equals(valueStr)) {
+                try {
+                    return Long.valueOf(valueStr);
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            }
+            try {
+                Thread.sleep(ORDER_SUBMIT_WAIT_INTERVAL_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 按首次订单的ID返回同样的下单结果
+     */
+    private Map<String, Object> buildOrderResult(Long orderId) {
+        OmsOrder order = orderMapper.selectByPrimaryKey(orderId);
+        if (order == null) {
+            Asserts.fail("订单正在处理中，请稍后重试！");
+        }
+        OmsOrderItemExample example = new OmsOrderItemExample();
+        example.createCriteria().andOrderIdEqualTo(orderId);
+        List<OmsOrderItem> orderItemList = orderItemMapper.selectByExample(example);
+        Map<String, Object> result = new HashMap<>();
+        result.put("order", order);
+        result.put("orderItemList", orderItemList);
+        return result;
+    }
+
+    private Map<String, Object> doGenerateOrder(OrderParam orderParam, UmsMember currentMember) {
+        List<OmsOrderItem> orderItemList = new ArrayList<>();
+        //获取购物车及优惠信息
         List<CartPromotionItem> cartPromotionItemList = cartItemService.listPromotion(currentMember.getId(), orderParam.getCartIds());
+        if (CollUtil.isEmpty(cartPromotionItemList)) {
+            Asserts.fail("购物车中没有可下单的商品！");
+        }
         for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
             //生成下单商品信息
             OmsOrderItem orderItem = new OmsOrderItem();
@@ -439,6 +567,17 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         if(CollUtil.isNotEmpty(orderList)){
             return orderList.get(0);
         }else return null;
+    }
+
+    /**
+     * 构建下单防重锁的Redis key：会员ID + 购物车ID批次（排序去重后）
+     */
+    private String buildOrderSubmitKey(Long memberId, List<Long> cartIds) {
+        String cartKey = "all";
+        if (CollUtil.isNotEmpty(cartIds)) {
+            cartKey = cartIds.stream().distinct().sorted().map(String::valueOf).collect(Collectors.joining(","));
+        }
+        return REDIS_DATABASE + ":" + REDIS_KEY_ORDER_SUBMIT + ":" + memberId + ":" + cartKey;
     }
 
     /**
