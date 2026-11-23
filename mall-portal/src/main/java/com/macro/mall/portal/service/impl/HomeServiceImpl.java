@@ -39,6 +39,7 @@ public class HomeServiceImpl implements HomeService {
 
     @Override
     public HomeContentResult content() {
+        // TODO 可以添加缓存
         HomeContentResult result = new HomeContentResult();
         //获取首页广告
         result.setAdvertiseList(getHomeAdvertiseList());
@@ -57,7 +58,7 @@ public class HomeServiceImpl implements HomeService {
 
     @Override
     public List<PmsProduct> recommendProductList(Integer pageSize, Integer pageNum) {
-        // TODO: 2019/1/29 暂时默认推荐所有商品
+        // TODO: 2019/1/29 暂时默认推荐所有商品， 后续可以根据用户需要添加个性化推荐逻辑
         PageHelper.startPage(pageNum,pageSize);
         PmsProductExample example = new PmsProductExample();
         example.createCriteria()

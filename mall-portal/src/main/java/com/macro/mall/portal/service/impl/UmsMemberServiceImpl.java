@@ -96,6 +96,7 @@ public class UmsMemberServiceImpl implements UmsMemberService {
         umsMember.setCreateTime(new Date());
         umsMember.setStatus(1);
         //获取默认会员等级并设置
+        //TODO 可以加入缓存，避免每次查询都从数据库中查询
         UmsMemberLevelExample levelExample = new UmsMemberLevelExample();
         levelExample.createCriteria().andDefaultStatusEqualTo(1);
         List<UmsMemberLevel> memberLevelList = memberLevelMapper.selectByExample(levelExample);
@@ -109,6 +110,7 @@ public class UmsMemberServiceImpl implements UmsMemberService {
     @Override
     public String generateAuthCode(String telephone) {
         // 此处使用模拟生成验证码逻辑，真实环境应接入短信服务，可使用SMS4J来实现
+        // TODO 实现短信验证码发送逻辑
         StringBuilder sb = new StringBuilder();
         Random random = new Random();
         for(int i=0;i<6;i++){
@@ -138,6 +140,7 @@ public class UmsMemberServiceImpl implements UmsMemberService {
 
     @Override
     public UmsMember getCurrentMember() {
+        // TODO 学习一下SecurityContextHolder和Authentication的使用，了解存储结构
         SecurityContext ctx = SecurityContextHolder.getContext();
         Authentication auth = ctx.getAuthentication();
         MemberDetails memberDetails = (MemberDetails) auth.getPrincipal();

@@ -42,8 +42,6 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     @Autowired
     private UmsIntegrationConsumeSettingMapper integrationConsumeSettingMapper;
     @Autowired
-    private PmsSkuStockMapper skuStockMapper;
-    @Autowired
     private SmsCouponHistoryDao couponHistoryDao;
     @Autowired
     private OmsOrderMapper orderMapper;
@@ -119,10 +117,6 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
             orderItem.setGiftIntegration(cartPromotionItem.getIntegration());
             orderItem.setGiftGrowth(cartPromotionItem.getGrowth());
             orderItemList.add(orderItem);
-        }
-        //判断购物车中商品是否都有库存
-        if (!hasStock(cartPromotionItemList)) {
-            Asserts.fail("库存不足，无法下单");
         }
         //判断使用使用了优惠券
         if (orderParam.getCouponId() == null) {
@@ -260,7 +254,14 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         orderMapper.updateByPrimaryKeySelective(order);
         //恢复所有下单商品的锁定库存，扣减真实库存
         OmsOrderDetail orderDetail = portalOrderDao.getDetail(orderId);
-        int count = portalOrderDao.updateSkuStock(orderDetail.getOrderItemList());
+        int count = 0;
+        for (OmsOrderItem orderItem : orderDetail.getOrderItemList()) {
+            int rows = portalOrderDao.deductSkuStock(orderItem.getProductSkuId(), orderItem.getProductQuantity());
+            if (rows == 0) {
+                Asserts.fail("商品库存扣减失败，商品SKU ID：" + orderItem.getProductSkuId());
+            }
+            count += rows;
+        }
         return count;
     }
 
@@ -730,28 +731,16 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
 
     /**
      * 锁定下单商品的所有库存
+     * 使用带可用库存条件的原子更新，保证「校验+锁定」不可分割；
+     * 任一商品库存不足时抛出异常，由 generateOrder 的事务回滚已锁定的库存。
      */
     private void lockStock(List<CartPromotionItem> cartPromotionItemList) {
         for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
-            PmsSkuStock skuStock = skuStockMapper.selectByPrimaryKey(cartPromotionItem.getProductSkuId());
-            skuStock.setLockStock(skuStock.getLockStock() + cartPromotionItem.getQuantity());
-            skuStockMapper.updateByPrimaryKeySelective(skuStock);
-        }
-    }
-
-    /**
-     * 判断下单商品是否都有库存
-     */
-    private boolean hasStock(List<CartPromotionItem> cartPromotionItemList) {
-        for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
-            if (cartPromotionItem.getRealStock()==null //判断真实库存是否为空
-                    ||cartPromotionItem.getRealStock() <= 0 //判断真实库存是否小于0
-                    || cartPromotionItem.getRealStock() < cartPromotionItem.getQuantity()) //判断真实库存是否小于下单的数量
-            {
-                return false;
+            int rows = portalOrderDao.lockSkuStock(cartPromotionItem.getProductSkuId(), cartPromotionItem.getQuantity());
+            if (rows == 0) {
+                Asserts.fail("库存不足，无法下单，商品SKU ID：" + cartPromotionItem.getProductSkuId());
             }
         }
-        return true;
     }
 
     /**

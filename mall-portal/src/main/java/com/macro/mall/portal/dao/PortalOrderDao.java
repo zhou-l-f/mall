@@ -17,9 +17,16 @@ public interface PortalOrderDao {
     OmsOrderDetail getDetail(@Param("orderId") Long orderId);
 
     /**
-     * 修改 pms_sku_stock表的锁定库存及真实库存
+     * 原子锁定单个SKU库存：可用库存（stock-lock_stock）充足时才累加锁定库存
+     * @return 影响行数，0 表示库存不足或SKU不存在
      */
-    int updateSkuStock(@Param("itemList") List<OmsOrderItem> orderItemList);
+    int lockSkuStock(@Param("skuId") Long skuId, @Param("quantity") Integer quantity);
+
+    /**
+     * 原子扣减单个SKU的真实库存并释放锁定库存：库存与锁定库存都充足时才扣减
+     * @return 影响行数，0 表示库存不足或锁定库存不足
+     */
+    int deductSkuStock(@Param("skuId") Long skuId, @Param("quantity") Integer quantity);
 
     /**
      * 获取超时订单

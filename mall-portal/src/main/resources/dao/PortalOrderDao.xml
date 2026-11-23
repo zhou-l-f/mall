@@ -47,24 +47,19 @@
             AND o.create_time &lt; date_add(NOW(), INTERVAL -#{minute} MINUTE);
     </select>
 
-    <update id="updateSkuStock">
+    <update id="lockSkuStock">
         UPDATE pms_sku_stock
-        SET
-            stock = CASE id
-            <foreach collection="itemList" item="item">
-              WHEN #{item.productSkuId} THEN stock - #{item.productQuantity}
-            </foreach>
-            END,
-            lock_stock = CASE id
-            <foreach collection="itemList" item="item">
-              WHEN #{item.productSkuId} THEN lock_stock - #{item.productQuantity}
-            </foreach>
-            END
-        WHERE
-            id IN
-        <foreach collection="itemList" item="item" separator="," open="(" close=")">
-            #{item.productSkuId}
-        </foreach>
+        SET lock_stock = lock_stock + #{quantity}
+        WHERE id = #{skuId}
+          AND stock - lock_stock &gt;= #{quantity}
+    </update>
+    <update id="deductSkuStock">
+        UPDATE pms_sku_stock
+        SET stock = stock - #{quantity},
+            lock_stock = lock_stock - #{quantity}
+        WHERE id = #{skuId}
+          AND stock &gt;= #{quantity}
+          AND lock_stock &gt;= #{quantity}
     </update>
     <update id="updateOrderStatus">
         update oms_order
