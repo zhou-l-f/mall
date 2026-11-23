@@ -2,6 +2,7 @@ package com.macro.mall.portal.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.macro.mall.common.exception.Asserts;
+import com.macro.mall.common.service.RedisService;
 import com.macro.mall.mapper.UmsMemberLevelMapper;
 import com.macro.mall.mapper.UmsMemberMapper;
 import com.macro.mall.model.UmsMember;
@@ -49,10 +50,20 @@ public class UmsMemberServiceImpl implements UmsMemberService {
     private UmsMemberLevelMapper memberLevelMapper;
     @Autowired
     private UmsMemberCacheService memberCacheService;
+    @Autowired
+    private RedisService redisService;
+    @Value("${redis.database}")
+    private String REDIS_DATABASE;
     @Value("${redis.key.authCode}")
     private String REDIS_KEY_PREFIX_AUTH_CODE;
     @Value("${redis.expire.authCode}")
     private Long AUTH_CODE_EXPIRE_SECONDS;
+    @Value("${redis.key.loginFail}")
+    private String REDIS_KEY_LOGIN_FAIL;
+    @Value("${redis.expire.loginFail}")
+    private Long LOGIN_FAIL_EXPIRE_SECONDS;
+    @Value("${redis.login.maxFail}")
+    private Integer LOGIN_MAX_FAIL_COUNT;
 
     @Override
     public UmsMember getByUsername(String username) {
@@ -176,6 +187,12 @@ public class UmsMemberServiceImpl implements UmsMemberService {
     @Override
     public String login(String username, String password) {
         String token = null;
+        String failKey = REDIS_DATABASE + ":" + REDIS_KEY_LOGIN_FAIL + ":" + username;
+        //失败次数达到阈值后，锁定时间内直接拒绝，防止暴力破解
+        Object failCount = redisService.get(failKey);
+        if (failCount != null && Long.parseLong(failCount.toString()) >= LOGIN_MAX_FAIL_COUNT) {
+            Asserts.fail("登录失败次数过多，请 " + LOGIN_FAIL_EXPIRE_SECONDS / 60 + " 分钟后再试");
+        }
         //密码需要客户端加密后传递
         try {
             UserDetails userDetails = loadUserByUsername(username);
@@ -185,10 +202,30 @@ public class UmsMemberServiceImpl implements UmsMemberService {
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
             SecurityContextHolder.getContext().setAuthentication(authentication);
             token = jwtTokenUtil.generateToken(userDetails);
+            //登录成功清除失败计数
+            redisService.del(failKey);
         } catch (AuthenticationException e) {
             LOGGER.warn("登录异常:{}", e.getMessage());
+            recordLoginFail(failKey);
         }
         return token;
+    }
+
+    /**
+     * 记录登录失败次数，首次失败时设置统计窗口，达到阈值时提示锁定
+     */
+    private void recordLoginFail(String failKey) {
+        Long count = redisService.incr(failKey, 1);
+        if (count == null) {
+            return;
+        }
+        if (count == 1) {
+            //固定窗口统计，窗口结束后自动解锁
+            redisService.expire(failKey, LOGIN_FAIL_EXPIRE_SECONDS);
+        }
+        if (count >= LOGIN_MAX_FAIL_COUNT) {
+            Asserts.fail("登录失败次数过多，请 " + LOGIN_FAIL_EXPIRE_SECONDS / 60 + " 分钟后再试");
+        }
     }
 
     @Override

@@ -63,12 +63,16 @@ redis:
     couponReceive: 'ums:couponReceive'
     homeContent: 'home:content'
     memberNotExist: 'ums:memberNotExist'
+    loginFail: 'ums:loginFail'
     member: 'ums:member'
   expire:
     authCode: 90 # 验证码超期时间
     common: 86400 # 24小时
     home: 300 # 首页内容缓存时间（秒）
     memberNotExist: 60 # 不存在账号的空值缓存时间（秒）
+    loginFail: 600 # 登录失败计数与锁定时间（秒）
+  login:
+    maxFail: 5 # 登录失败锁定阈值
 
 mongo:
   insert:
