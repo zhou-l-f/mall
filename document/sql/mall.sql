@@ -486,7 +486,10 @@ CREATE TABLE `oms_order`  (
   `receive_time` datetime NULL DEFAULT NULL COMMENT '确认收货时间',
   `comment_time` datetime NULL DEFAULT NULL COMMENT '评价时间',
   `modify_time` datetime NULL DEFAULT NULL COMMENT '修改时间',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  INDEX `idx_oms_order_member` (`member_id`, `delete_status`, `create_time`) USING BTREE,
+  INDEX `idx_oms_order_status_time` (`status`, `create_time`) USING BTREE,
+  INDEX `idx_oms_order_sn` (`order_sn`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 77 CHARACTER SET = utf8 COLLATE = utf8_general_ci COMMENT = '订单表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
@@ -584,7 +587,8 @@ CREATE TABLE `oms_order_item`  (
   `gift_integration` int(11) NULL DEFAULT 0,
   `gift_growth` int(11) NULL DEFAULT 0,
   `product_attr` varchar(500) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL COMMENT '商品销售属性:[{\"key\":\"颜色\",\"value\":\"颜色\"},{\"key\":\"容量\",\"value\":\"4G\"}]',
-  PRIMARY KEY (`id`) USING BTREE
+  PRIMARY KEY (`id`) USING BTREE,
+  INDEX `idx_oms_order_item_order` (`order_id`) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 115 CHARACTER SET = utf8 COLLATE = utf8_general_ci COMMENT = '订单中所包含的商品' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
