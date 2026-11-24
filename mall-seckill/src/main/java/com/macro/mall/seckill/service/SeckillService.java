@@ -17,4 +17,9 @@ public interface SeckillService {
      * 查询秒杀活动详情及商品列表
      */
     SeckillActivityDetail getActivityDetail(Long activityId);
+
+    /**
+     * 按订单号查询抢购结果
+     */
+    SeckillResult getResult(String orderSn);
 }

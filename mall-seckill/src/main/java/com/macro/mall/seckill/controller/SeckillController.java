@@ -34,4 +34,10 @@ public class SeckillController {
     public CommonResult<SeckillActivityDetail> detail(@PathVariable Long activityId) {
         return CommonResult.success(seckillService.getActivityDetail(activityId));
     }
+
+    @Operation(summary = "查询秒杀抢购结果")
+    @GetMapping("/result/{orderSn}")
+    public CommonResult<SeckillResult> result(@PathVariable String orderSn) {
+        return CommonResult.success(seckillService.getResult(orderSn));
+    }
 }

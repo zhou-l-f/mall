@@ -104,6 +104,39 @@ public class SeckillServiceImpl implements SeckillService {
         return detail;
     }
 
+    @Override
+    public SeckillResult getResult(String orderSn) {
+        SeckillResult result = redisUtil.getResultObject(orderSn);
+        if (result != null) {
+            if (SeckillResult.STATUS_SUCCESS.equals(result.getStatus()) && result.getOrderId() == null) {
+                fillOrderInfo(result, orderSn);
+            }
+            return result;
+        }
+        //结果 key 过期或丢失时回源订单表
+        SeckillResult fromDb = new SeckillResult();
+        if (fillOrderInfo(fromDb, orderSn)) {
+            return fromDb;
+        }
+        return SeckillResult.queuing(orderSn);
+    }
+
+    /**
+     * 用订单表数据补全结果，订单存在返回 true
+     */
+    private boolean fillOrderInfo(SeckillResult result, String orderSn) {
+        com.macro.mall.model.OmsOrder order = seckillDao.selectOrderBySn(orderSn);
+        if (order == null) {
+            return false;
+        }
+        result.setStatus(SeckillResult.STATUS_SUCCESS);
+        result.setOrderSn(orderSn);
+        result.setOrderId(order.getId());
+        result.setPayAmount(order.getPayAmount());
+        result.setReason(null);
+        return true;
+    }
+
     private SeckillOrderMessage buildMessage(SeckillActivity activity, SeckillSku sku,
                                              Long memberId, String orderSn) {
         SeckillOrderMessage message = new SeckillOrderMessage();
