@@ -4,12 +4,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.macro.mall.seckill.domain.SeckillActivity;
 import com.macro.mall.seckill.domain.SeckillResult;
 import com.macro.mall.seckill.domain.SeckillSku;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -33,14 +38,12 @@ public class SeckillRedisUtil {
 
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
-    private final DefaultRedisScript<String> seckillScript;
+    private final RedisScript<String> seckillScript;
 
     public SeckillRedisUtil(StringRedisTemplate stringRedisTemplate, ObjectMapper objectMapper) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
-        this.seckillScript = new DefaultRedisScript<>();
-        this.seckillScript.setLocation(new ClassPathResource("lua/seckill.lua"));
-        this.seckillScript.setResultType(String.class);
+        this.seckillScript = new LockFreeRedisScript(loadScriptText("lua/seckill.lua"));
     }
 
     /**
@@ -242,5 +245,58 @@ public class SeckillRedisUtil {
         Boolean first = stringRedisTemplate.opsForValue()
                 .setIfAbsent("seckill:compensated:" + orderSn, "1", 1, TimeUnit.HOURS);
         return Boolean.TRUE.equals(first);
+    }
+
+    private static String loadScriptText(String path) {
+        ClassLoader classLoader = SeckillRedisUtil.class.getClassLoader();
+        try (InputStream in = classLoader.getResourceAsStream(path)) {
+            if (in == null) {
+                throw new IllegalStateException("秒杀脚本不存在: " + path);
+            }
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("读取秒杀脚本失败: " + path, e);
+        }
+    }
+
+    /**
+     * 预计算 SHA1 的脚本实现
+     * DefaultRedisScript#getSha1() 每次调用都要获取实例级 ReentrantLock（即使 SHA1 已缓存），
+     * 高并发下所有抢购线程在这把锁上串行排队，成为吞吐瓶颈；
+     * 这里在构造期一次性算出 SHA1，执行期完全无锁
+     */
+    private static final class LockFreeRedisScript implements RedisScript<String> {
+
+        private final String script;
+        private final String sha1;
+
+        private LockFreeRedisScript(String script) {
+            this.script = script;
+            this.sha1 = sha1Hex(script);
+        }
+
+        @Override
+        public String getSha1() {
+            return sha1;
+        }
+
+        @Override
+        public Class<String> getResultType() {
+            return String.class;
+        }
+
+        @Override
+        public String getScriptAsString() {
+            return script;
+        }
+
+        private static String sha1Hex(String text) {
+            try {
+                MessageDigest digest = MessageDigest.getInstance("SHA-1");
+                return HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8)));
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException("无法计算秒杀脚本 SHA1", e);
+            }
+        }
     }
 }
