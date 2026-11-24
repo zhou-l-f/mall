@@ -64,6 +64,7 @@ redis:
     homeContent: 'home:content'
     memberNotExist: 'ums:memberNotExist'
     loginFail: 'ums:loginFail'
+    memberLevelDefault: 'ums:memberLevelDefault'
     member: 'ums:member'
   expire:
     authCode: 90 # 验证码超期时间
@@ -71,6 +72,7 @@ redis:
     home: 300 # 首页内容缓存时间（秒）
     memberNotExist: 60 # 不存在账号的空值缓存时间（秒）
     loginFail: 600 # 登录失败计数与锁定时间（秒）
+    memberLevel: 86400 # 默认会员等级缓存时间（秒）
   login:
     maxFail: 5 # 登录失败锁定阈值
 

@@ -64,6 +64,10 @@ public class UmsMemberServiceImpl implements UmsMemberService {
     private Long LOGIN_FAIL_EXPIRE_SECONDS;
     @Value("${redis.login.maxFail}")
     private Integer LOGIN_MAX_FAIL_COUNT;
+    @Value("${redis.key.memberLevelDefault}")
+    private String REDIS_KEY_MEMBER_LEVEL_DEFAULT;
+    @Value("${redis.expire.memberLevel}")
+    private Long MEMBER_LEVEL_EXPIRE_SECONDS;
 
     @Override
     public UmsMember getByUsername(String username) {
@@ -112,18 +116,35 @@ public class UmsMemberServiceImpl implements UmsMemberService {
         umsMember.setPassword(passwordEncoder.encode(password));
         umsMember.setCreateTime(new Date());
         umsMember.setStatus(1);
-        //获取默认会员等级并设置
-        //TODO 可以加入缓存，避免每次查询都从数据库中查询
-        UmsMemberLevelExample levelExample = new UmsMemberLevelExample();
-        levelExample.createCriteria().andDefaultStatusEqualTo(1);
-        List<UmsMemberLevel> memberLevelList = memberLevelMapper.selectByExample(levelExample);
-        if (!CollectionUtils.isEmpty(memberLevelList)) {
-            umsMember.setMemberLevelId(memberLevelList.get(0).getId());
+        //获取默认会员等级并设置，优先读取Redis缓存
+        UmsMemberLevel defaultLevel = getDefaultMemberLevel();
+        if (defaultLevel != null) {
+            umsMember.setMemberLevelId(defaultLevel.getId());
         }
         memberMapper.insert(umsMember);
         //清除可能残留的不存在标记，保证注册后可立即登录
         memberCacheService.delMemberNotExist(username);
         umsMember.setPassword(null);
+    }
+
+    /**
+     * 获取默认会员等级，优先从Redis缓存读取
+     */
+    private UmsMemberLevel getDefaultMemberLevel() {
+        String key = REDIS_DATABASE + ":" + REDIS_KEY_MEMBER_LEVEL_DEFAULT;
+        Object cachedValue = redisService.get(key);
+        if (cachedValue instanceof UmsMemberLevel) {
+            return (UmsMemberLevel) cachedValue;
+        }
+        UmsMemberLevelExample levelExample = new UmsMemberLevelExample();
+        levelExample.createCriteria().andDefaultStatusEqualTo(1);
+        List<UmsMemberLevel> memberLevelList = memberLevelMapper.selectByExample(levelExample);
+        if (CollectionUtils.isEmpty(memberLevelList)) {
+            return null;
+        }
+        UmsMemberLevel defaultLevel = memberLevelList.get(0);
+        redisService.set(key, defaultLevel, MEMBER_LEVEL_EXPIRE_SECONDS);
+        return defaultLevel;
     }
 
     @Override
