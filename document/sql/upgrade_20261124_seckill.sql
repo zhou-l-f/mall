@@ -31,3 +31,21 @@ CREATE TABLE IF NOT EXISTS `sms_seckill_sku` (
   UNIQUE KEY `uk_activity_sku` (`activity_id`, `sku_id`),
   KEY `idx_sku_id` (`sku_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='秒杀商品表';
+
+-- ----------------------------
+-- 后台权限初始化（幂等）
+-- ----------------------------
+INSERT INTO `ums_resource` (`create_time`, `name`, `url`, `description`, `category_id`)
+SELECT NOW(), '秒杀活动管理', '/seckill/activity/**', '秒杀活动配置', 3 FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM `ums_resource` WHERE `url` = '/seckill/activity/**');
+
+INSERT INTO `ums_resource` (`create_time`, `name`, `url`, `description`, `category_id`)
+SELECT NOW(), '秒杀商品管理', '/seckill/sku/**', '秒杀商品配置', 3 FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM `ums_resource` WHERE `url` = '/seckill/sku/**');
+
+-- 绑定到超级管理员角色（role_id=5）
+INSERT INTO `ums_role_resource_relation` (`role_id`, `resource_id`)
+SELECT 5, r.`id` FROM `ums_resource` r
+WHERE r.`url` IN ('/seckill/activity/**', '/seckill/sku/**')
+  AND NOT EXISTS (SELECT 1 FROM `ums_role_resource_relation` rr
+                  WHERE rr.`role_id` = 5 AND rr.`resource_id` = r.`id`);
