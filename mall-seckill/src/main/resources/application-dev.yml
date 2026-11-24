@@ -37,9 +37,12 @@ spring:
     listener:
       simple:
         acknowledge-mode: manual
+        # 多消费者并行建单，提升落库吞吐；预取数按消费者计
+        concurrency: 4
+        max-concurrency: 8
         prefetch: 20
 
 logging:
   level:
     root: info
-    com.macro.mall: debug
+    com.macro.mall: info

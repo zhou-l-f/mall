@@ -29,7 +29,7 @@ minio:
 logging:
   level:
     root: info
-    com.macro.mall: debug
+    com.macro.mall: info
 
 logstash:
   host: localhost
