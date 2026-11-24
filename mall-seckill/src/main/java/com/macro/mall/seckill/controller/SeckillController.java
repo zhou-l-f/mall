@@ -26,7 +26,12 @@ public class SeckillController {
     @PostMapping("/{activityId}/{skuId}")
     public CommonResult<SeckillResult> seckill(@PathVariable Long activityId,
                                                @PathVariable Long skuId) {
-        return CommonResult.success(seckillService.seckill(activityId, skuId));
+        SeckillResult result = seckillService.seckill(activityId, skuId);
+        //售罄、限购等业务失败按正常返回封装下发，与全局异常处理保持同一结构
+        if (SeckillResult.STATUS_FAILED.equals(result.getStatus())) {
+            return CommonResult.failed(result.getReason());
+        }
+        return CommonResult.success(result);
     }
 
     @Operation(summary = "查询秒杀活动详情")

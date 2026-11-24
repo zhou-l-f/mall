@@ -9,7 +9,7 @@ import com.macro.mall.seckill.domain.SeckillResult;
 public interface SeckillService {
 
     /**
-     * 执行秒杀抢购，成功后返回排队中的订单号
+     * 执行秒杀抢购，成功返回排队中的订单号；售罄、限购等业务失败返回 status=FAILED 与原因，不抛业务异常
      */
     SeckillResult seckill(Long activityId, Long skuId);
 

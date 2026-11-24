@@ -50,6 +50,13 @@ public class SeckillResult implements Serializable {
         return result;
     }
 
+    /**
+     * 同步抢购失败（未生成订单号），由接口层转换为返回封装的失败结果
+     */
+    public static SeckillResult failed(String reason) {
+        return failed(null, reason);
+    }
+
     public String getStatus() {
         return status;
     }

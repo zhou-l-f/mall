@@ -56,13 +56,16 @@ public class SeckillServiceImpl implements SeckillService {
         }
         SeckillActivity activity = loadActivity(activityId);
         if (activity == null) {
-            Asserts.fail("秒杀活动不存在");
+            return SeckillResult.failed("秒杀活动不存在");
         }
-        validateActivityWindow(activity);
+        String windowError = checkActivityWindow(activity);
+        if (windowError != null) {
+            return SeckillResult.failed(windowError);
+        }
         long expireSeconds = calculateExpireSeconds(activity);
         SeckillSku sku = loadSku(activityId, skuId, expireSeconds);
         if (sku == null || sku.getStatus() == null || sku.getStatus() != 1) {
-            Asserts.fail("秒杀商品不存在或已下架");
+            return SeckillResult.failed("秒杀商品不存在或已下架");
         }
         long nowMillis = System.currentTimeMillis();
         long startMillis = activity.getStartTime() == null ? 0L : activity.getStartTime().getTime();
@@ -74,20 +77,9 @@ public class SeckillServiceImpl implements SeckillService {
                 limitCount, sku.getSeckillStock(), expireSeconds, resultExpireSeconds,
                 nowMillis, startMillis, endMillis, orderSnPrefix);
         long code = scriptResult.code();
-        if (code == SeckillRedisUtil.SOLD_OUT) {
-            Asserts.fail("商品已售罄");
-        }
-        if (code == SeckillRedisUtil.LIMIT_EXCEEDED) {
-            Asserts.fail("超出限购数量");
-        }
-        if (code == SeckillRedisUtil.NOT_STARTED) {
-            Asserts.fail("秒杀活动未开始");
-        }
-        if (code == SeckillRedisUtil.ACTIVITY_ENDED) {
-            Asserts.fail("秒杀活动已结束");
-        }
         if (code != SeckillRedisUtil.SUCCESS) {
-            Asserts.fail("抢购失败，请稍后重试");
+            //售罄、限购等属于预期内高频结果，直接返回失败对象，不抛异常避免栈填充开销
+            return SeckillResult.failed(scriptFailMessage(code));
         }
         String orderSn = scriptResult.orderSn();
         SeckillOrderMessage message = buildMessage(activity, sku, memberId, orderSn);
@@ -200,17 +192,40 @@ public class SeckillServiceImpl implements SeckillService {
         return sku;
     }
 
-    private void validateActivityWindow(SeckillActivity activity) {
+    /**
+     * 活动窗口预校验，返回失败原因，通过时返回 null
+     */
+    private String checkActivityWindow(SeckillActivity activity) {
         Date now = new Date();
         if (activity.getStatus() != null && activity.getStatus() == 2) {
-            Asserts.fail("秒杀活动已结束");
+            return "秒杀活动已结束";
         }
         if (activity.getStartTime() != null && now.before(activity.getStartTime())) {
-            Asserts.fail("秒杀活动未开始");
+            return "秒杀活动未开始";
         }
         if (activity.getEndTime() != null && now.after(activity.getEndTime())) {
-            Asserts.fail("秒杀活动已结束");
+            return "秒杀活动已结束";
         }
+        return null;
+    }
+
+    /**
+     * 脚本结果码转失败原因
+     */
+    private String scriptFailMessage(long code) {
+        if (code == SeckillRedisUtil.SOLD_OUT) {
+            return "商品已售罄";
+        }
+        if (code == SeckillRedisUtil.LIMIT_EXCEEDED) {
+            return "超出限购数量";
+        }
+        if (code == SeckillRedisUtil.NOT_STARTED) {
+            return "秒杀活动未开始";
+        }
+        if (code == SeckillRedisUtil.ACTIVITY_ENDED) {
+            return "秒杀活动已结束";
+        }
+        return "抢购失败，请稍后重试";
     }
 
     private long calculateExpireSeconds(SeckillActivity activity) {
