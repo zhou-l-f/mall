@@ -2,6 +2,8 @@ package com.macro.mall.portal.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.pagehelper.PageHelper;
 import com.macro.mall.common.api.CommonPage;
 import com.macro.mall.common.exception.Asserts;
@@ -14,8 +16,11 @@ import com.macro.mall.portal.dao.PortalOrderItemDao;
 import com.macro.mall.portal.dao.SmsCouponHistoryDao;
 import com.macro.mall.portal.domain.*;
 import com.macro.mall.portal.service.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -33,6 +38,9 @@ import java.util.stream.Collectors;
  */
 @Service
 public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(OmsPortalOrderServiceImpl.class);
+
     @Autowired
     private UmsMemberService memberService;
     @Autowired
@@ -88,6 +96,10 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     private OmsOrderItemMapper orderItemMapper;
     @Autowired
     private CancelOrderSender cancelOrderSender;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @Override
     public ConfirmOrderResult generateConfirmOrder(List<Long> cartIds) {
@@ -411,12 +423,15 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
             count++;
             //解除订单商品库存锁定
             portalOrderDao.releaseSkuStockLock(timeOutOrder.getOrderItemList());
+            //秒杀订单额外回补秒杀库存与 Redis 预占
+            rollbackSeckillStock(timeOutOrder, timeOutOrder.getOrderItemList());
             //修改优惠券使用状态
             updateCouponStatus(timeOutOrder.getCouponId(), timeOutOrder.getMemberId(), 0);
             //返还使用积分
             if (timeOutOrder.getUseIntegration() != null) {
                 UmsMember member = memberService.getById(timeOutOrder.getMemberId());
-                memberService.updateIntegration(timeOutOrder.getMemberId(), member.getIntegration() + timeOutOrder.getUseIntegration());
+                int integration = member.getIntegration() == null ? 0 : member.getIntegration();
+                memberService.updateIntegration(timeOutOrder.getMemberId(), integration + timeOutOrder.getUseIntegration());
             }
         }
         return count;
@@ -436,12 +451,89 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         if (!CollectionUtils.isEmpty(orderItemList)) {
             portalOrderDao.releaseSkuStockLock(orderItemList);
         }
+        //秒杀订单额外回补秒杀库存与 Redis 预占
+        rollbackSeckillStock(cancelOrder, orderItemList);
         //修改优惠券使用状态
         updateCouponStatus(cancelOrder.getCouponId(), cancelOrder.getMemberId(), 0);
         //返还使用积分
         if (cancelOrder.getUseIntegration() != null) {
             UmsMember member = memberService.getById(cancelOrder.getMemberId());
-            memberService.updateIntegration(cancelOrder.getMemberId(), member.getIntegration() + cancelOrder.getUseIntegration());
+            int integration = member.getIntegration() == null ? 0 : member.getIntegration();
+            memberService.updateIntegration(cancelOrder.getMemberId(), integration + cancelOrder.getUseIntegration());
+        }
+    }
+
+    /**
+     * 秒杀订单取消/超时关闭时回补库存：
+     * 1. 数据库秒杀库存 seckill_stock 增加（pms_sku_stock 的 lock_stock 已由 releaseSkuStockLock 释放）
+     * 2. Redis 预占库存增加、会员限购计数减少，使该商品可再次被抢购
+     */
+    private void rollbackSeckillStock(OmsOrder order, List<OmsOrderItem> orderItemList) {
+        if (order == null || order.getOrderType() == null || order.getOrderType() != 1
+                || CollectionUtils.isEmpty(orderItemList) || order.getPromotionInfo() == null) {
+            return;
+        }
+        Long activityId;
+        try {
+            JsonNode node = objectMapper.readTree(order.getPromotionInfo());
+            if (!node.hasNonNull("activityId")) {
+                return;
+            }
+            activityId = node.get("activityId").asLong();
+        } catch (Exception e) {
+            LOGGER.error("解析秒杀订单活动信息失败，orderId={}", order.getId(), e);
+            return;
+        }
+        for (OmsOrderItem orderItem : orderItemList) {
+            int quantity = orderItem.getProductQuantity() == null ? 0 : orderItem.getProductQuantity();
+            if (quantity <= 0) {
+                continue;
+            }
+            Long seckillSkuId = portalOrderDao.getSeckillSkuId(activityId, orderItem.getProductSkuId());
+            if (seckillSkuId != null) {
+                portalOrderDao.restoreSeckillStock(seckillSkuId, quantity);
+            }
+        }
+        //Redis 不受数据库事务控制，事务提交后再回补，避免数据库回滚导致两边数据不一致
+        List<OmsOrderItem> items = orderItemList;
+        Long activity = activityId;
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    for (OmsOrderItem orderItem : items) {
+                        int quantity = orderItem.getProductQuantity() == null ? 0 : orderItem.getProductQuantity();
+                        if (quantity > 0) {
+                            restoreSeckillRedis(activity, orderItem.getProductSkuId(), order.getMemberId(), quantity);
+                        }
+                    }
+                }
+            });
+        } else {
+            for (OmsOrderItem orderItem : items) {
+                int quantity = orderItem.getProductQuantity() == null ? 0 : orderItem.getProductQuantity();
+                if (quantity > 0) {
+                    restoreSeckillRedis(activity, orderItem.getProductSkuId(), order.getMemberId(), quantity);
+                }
+            }
+        }
+    }
+
+    /**
+     * 回补 Redis 秒杀预占数据，key 不存在说明活动已结束或未预热，仅以数据库为准
+     */
+    private void restoreSeckillRedis(Long activityId, Long skuId, Long memberId, int quantity) {
+        String stockKey = "seckill:stock:{" + activityId + ":" + skuId + "}";
+        if (Boolean.TRUE.equals(stringRedisTemplate.hasKey(stockKey))) {
+            stringRedisTemplate.opsForValue().increment(stockKey, quantity);
+        }
+        String boughtKey = "seckill:bought:{" + activityId + ":" + skuId + "}";
+        if (Boolean.TRUE.equals(stringRedisTemplate.hasKey(boughtKey))) {
+            Long remain = stringRedisTemplate.opsForHash()
+                    .increment(boughtKey, String.valueOf(memberId), -quantity);
+            if (remain != null && remain <= 0) {
+                stringRedisTemplate.opsForHash().delete(boughtKey, String.valueOf(memberId));
+            }
         }
     }
 

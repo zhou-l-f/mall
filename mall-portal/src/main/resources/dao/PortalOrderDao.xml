@@ -34,6 +34,8 @@
             o.integration,
             o.member_id,
             o.use_integration,
+            o.order_type,
+            o.promotion_info,
             ot.id               ot_id,
             ot.product_name     ot_product_name,
             ot.product_sku_id   ot_product_sku_id,
@@ -41,7 +43,7 @@
             ot.product_quantity ot_product_quantity
         FROM
             (
-                SELECT id, order_sn, coupon_id, integration, member_id, use_integration
+                SELECT id, order_sn, coupon_id, integration, member_id, use_integration, order_type, promotion_info
                 FROM oms_order
                 WHERE status = 0
                   AND create_time &lt; date_add(NOW(), INTERVAL -#{minute} MINUTE)
@@ -94,5 +96,18 @@
         <foreach collection="itemList" item="item" separator="," open="(" close=")">
             #{item.productSkuId}
         </foreach>
+    </update>
+    <select id="getSeckillSkuId" resultType="java.lang.Long">
+        SELECT id
+        FROM sms_seckill_sku
+        WHERE activity_id = #{activityId}
+          AND sku_id = #{skuId}
+        LIMIT 1
+    </select>
+    <update id="restoreSeckillStock">
+        UPDATE sms_seckill_sku
+        SET seckill_stock = seckill_stock + #{quantity},
+            update_time = NOW()
+        WHERE id = #{id}
     </update>
 </mapper>

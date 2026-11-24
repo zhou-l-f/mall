@@ -52,4 +52,14 @@ public interface PortalOrderDao {
      */
     int releaseSkuStockLock(@Param("itemList") List<OmsOrderItem> orderItemList);
 
+    /**
+     * 查询秒杀商品记录ID
+     */
+    Long getSeckillSkuId(@Param("activityId") Long activityId, @Param("skuId") Long skuId);
+
+    /**
+     * 取消秒杀订单时回补秒杀库存
+     */
+    int restoreSeckillStock(@Param("id") Long id, @Param("quantity") Integer quantity);
+
 }
