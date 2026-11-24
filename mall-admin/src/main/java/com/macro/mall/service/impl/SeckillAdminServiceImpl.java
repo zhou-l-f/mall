@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -27,6 +29,11 @@ import java.util.List;
 public class SeckillAdminServiceImpl implements SeckillAdminService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SeckillAdminServiceImpl.class);
+
+    /**
+     * 秒杀配置变更广播频道，与 mall-seckill 订阅端保持一致
+     */
+    private static final String CONFIG_REFRESH_CHANNEL = "seckill:config:refresh";
 
     @Autowired
     private SeckillAdminDao seckillAdminDao;
@@ -207,6 +214,7 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
         }
         try {
             stringRedisTemplate.delete(keys);
+            publishRefresh("A:" + activityId);
         } catch (Exception e) {
             LOGGER.warn("清理秒杀活动缓存失败, activityId={}", activityId, e);
         }
@@ -219,8 +227,32 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
             keys.add(boughtKey(activityId, skuId));
             keys.add(skuKey(activityId, skuId));
             stringRedisTemplate.delete(keys);
+            publishRefresh("S:" + activityId + ":" + skuId);
         } catch (Exception e) {
             LOGGER.warn("清理秒杀商品缓存失败, activityId={}, skuId={}", activityId, skuId, e);
+        }
+    }
+
+    /**
+     * 广播配置变更，通知抢购服务失效本地缓存；事务提交后再广播，避免订阅方回源读到旧数据
+     */
+    private void publishRefresh(String message) {
+        Runnable task = () -> {
+            try {
+                stringRedisTemplate.convertAndSend(CONFIG_REFRESH_CHANNEL, message);
+            } catch (Exception e) {
+                LOGGER.warn("广播秒杀配置变更失败, message={}", message, e);
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    task.run();
+                }
+            });
+        } else {
+            task.run();
         }
     }
 

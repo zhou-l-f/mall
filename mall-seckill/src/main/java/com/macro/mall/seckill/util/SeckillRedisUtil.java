@@ -21,18 +21,35 @@ public class SeckillRedisUtil {
 
     public static final long SOLD_OUT = -1L;
     public static final long LIMIT_EXCEEDED = -2L;
+    public static final long NOT_STARTED = -3L;
+    public static final long ACTIVITY_ENDED = -4L;
     public static final long SUCCESS = 1L;
+    public static final long SCRIPT_ERROR = -99L;
+
+    /**
+     * 后台配置变更广播频道，抢购服务订阅后失效本地缓存
+     */
+    public static final String CONFIG_REFRESH_CHANNEL = "seckill:config:refresh";
 
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
-    private final DefaultRedisScript<Long> seckillScript;
+    private final DefaultRedisScript<String> seckillScript;
 
     public SeckillRedisUtil(StringRedisTemplate stringRedisTemplate, ObjectMapper objectMapper) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.seckillScript = new DefaultRedisScript<>();
         this.seckillScript.setLocation(new ClassPathResource("lua/seckill.lua"));
-        this.seckillScript.setResultType(Long.class);
+        this.seckillScript.setResultType(String.class);
+    }
+
+    /**
+     * 抢购脚本返回结果
+     *
+     * @param code    结果码，SUCCESS 时 orderSn 有值
+     * @param orderSn 生成的订单号
+     */
+    public record SeckillScriptResult(long code, String orderSn) {
     }
 
     public String activityKey(Long activityId) {
@@ -52,7 +69,11 @@ public class SeckillRedisUtil {
     }
 
     public String resultKey(String orderSn) {
-        return "seckill:order:result:" + orderSn;
+        return resultKeyPrefix() + orderSn;
+    }
+
+    public String resultKeyPrefix() {
+        return "seckill:order:result:";
     }
 
     public String orderSnIncrKey() {
@@ -60,12 +81,27 @@ public class SeckillRedisUtil {
     }
 
     /**
-     * 执行抢购脚本：限购校验 -> 扣库存 -> 写防重
+     * 一次往返完成：活动窗口校验、库存预检、限购校验、扣减、订单号生成、结果写入
+     *
+     * @return 成功时返回订单号，失败时返回对应结果码
      */
-    public long executeSeckill(Long activityId, Long skuId, Integer limitCount, Long memberId) {
-        return stringRedisTemplate.execute(seckillScript,
-                Arrays.asList(stockKey(activityId, skuId), boughtKey(activityId, skuId)),
-                String.valueOf(limitCount), String.valueOf(memberId));
+    public SeckillScriptResult executeSeckill(Long activityId, Long skuId, Long memberId, int limitCount,
+                                              Integer initialStock, long activityExpireSeconds,
+                                              long resultExpireSeconds, long nowMillis,
+                                              long startMillis, long endMillis, String orderSnPrefix) {
+        String result = stringRedisTemplate.execute(seckillScript,
+                Arrays.asList(stockKey(activityId, skuId), boughtKey(activityId, skuId), orderSnIncrKey()),
+                String.valueOf(limitCount), String.valueOf(memberId), String.valueOf(initialStock),
+                String.valueOf(activityExpireSeconds), String.valueOf(resultExpireSeconds),
+                String.valueOf(nowMillis), String.valueOf(startMillis), String.valueOf(endMillis),
+                orderSnPrefix, resultKeyPrefix());
+        if (result == null) {
+            return new SeckillScriptResult(SCRIPT_ERROR, null);
+        }
+        if (result.startsWith("1|")) {
+            return new SeckillScriptResult(SUCCESS, result.substring(2));
+        }
+        return new SeckillScriptResult(Long.parseLong(result), null);
     }
 
     /**
@@ -74,11 +110,6 @@ public class SeckillRedisUtil {
     public void initStockIfAbsent(Long activityId, Long skuId, Integer stock, long expireSeconds) {
         stringRedisTemplate.opsForValue().setIfAbsent(stockKey(activityId, skuId), String.valueOf(stock),
                 expireSeconds, TimeUnit.SECONDS);
-    }
-
-    public Integer getStock(Long activityId, Long skuId) {
-        String value = stringRedisTemplate.opsForValue().get(stockKey(activityId, skuId));
-        return value == null ? null : Integer.valueOf(value);
     }
 
     public Integer getBoughtCount(Long activityId, Long skuId, Long memberId) {
@@ -92,13 +123,6 @@ public class SeckillRedisUtil {
 
     public void decrBought(Long activityId, Long skuId, Long memberId, int quantity) {
         stringRedisTemplate.opsForHash().increment(boughtKey(activityId, skuId), String.valueOf(memberId), -quantity);
-    }
-
-    /**
-     * 给防重 Hash 设置过期时间，避免活动结束后长期占用内存
-     */
-    public void expireBought(Long activityId, Long skuId, long expireSeconds) {
-        stringRedisTemplate.expire(boughtKey(activityId, skuId), expireSeconds, TimeUnit.SECONDS);
     }
 
     /**

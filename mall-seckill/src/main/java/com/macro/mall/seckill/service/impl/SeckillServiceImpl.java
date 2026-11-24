@@ -1,6 +1,7 @@
 package com.macro.mall.seckill.service.impl;
 
 import com.macro.mall.common.exception.Asserts;
+import com.macro.mall.seckill.component.SeckillLocalCache;
 import com.macro.mall.seckill.component.SeckillOrderSender;
 import com.macro.mall.seckill.dao.SeckillDao;
 import com.macro.mall.seckill.domain.*;
@@ -10,7 +11,6 @@ import com.macro.mall.seckill.util.SeckillRedisUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -32,21 +32,20 @@ public class SeckillServiceImpl implements SeckillService {
 
     private final SeckillDao seckillDao;
     private final SeckillRedisUtil redisUtil;
+    private final SeckillLocalCache localCache;
     private final SeckillMemberService memberService;
     private final SeckillOrderSender orderSender;
-    private final StringRedisTemplate stringRedisTemplate;
 
     @Value("${seckill.result-expire-seconds:86400}")
     private long resultExpireSeconds;
 
-    public SeckillServiceImpl(SeckillDao seckillDao, SeckillRedisUtil redisUtil,
-                              SeckillMemberService memberService, SeckillOrderSender orderSender,
-                              StringRedisTemplate stringRedisTemplate) {
+    public SeckillServiceImpl(SeckillDao seckillDao, SeckillRedisUtil redisUtil, SeckillLocalCache localCache,
+                              SeckillMemberService memberService, SeckillOrderSender orderSender) {
         this.seckillDao = seckillDao;
         this.redisUtil = redisUtil;
+        this.localCache = localCache;
         this.memberService = memberService;
         this.orderSender = orderSender;
-        this.stringRedisTemplate = stringRedisTemplate;
     }
 
     @Override
@@ -61,33 +60,39 @@ public class SeckillServiceImpl implements SeckillService {
         }
         validateActivityWindow(activity);
         long expireSeconds = calculateExpireSeconds(activity);
-        //热路径读 Redis 中的商品配置，避免每个抢购请求都查一次 MySQL
         SeckillSku sku = loadSku(activityId, skuId, expireSeconds);
         if (sku == null || sku.getStatus() == null || sku.getStatus() != 1) {
             Asserts.fail("秒杀商品不存在或已下架");
         }
-        //冷启动兜底：库存 key 不存在时从 DB 初始化，保证活动开始前未预热也能抢购
-        if (redisUtil.getStock(activityId, skuId) == null) {
-            redisUtil.initStockIfAbsent(activityId, skuId, sku.getSeckillStock(), expireSeconds);
-        }
+        long nowMillis = System.currentTimeMillis();
+        long startMillis = activity.getStartTime() == null ? 0L : activity.getStartTime().getTime();
+        long endMillis = activity.getEndTime() == null ? 0L : activity.getEndTime().getTime();
         int limitCount = sku.getLimitCount() == null ? 1 : sku.getLimitCount();
-        long code = redisUtil.executeSeckill(activityId, skuId, limitCount, memberId);
+        String orderSnPrefix = "SK" + LocalDateTime.now().format(ORDER_SN_FORMATTER);
+        //活动窗口校验、库存预检、限购校验、扣减、订单号生成、结果写入在一次 Lua 往返内完成
+        SeckillRedisUtil.SeckillScriptResult scriptResult = redisUtil.executeSeckill(activityId, skuId, memberId,
+                limitCount, sku.getSeckillStock(), expireSeconds, resultExpireSeconds,
+                nowMillis, startMillis, endMillis, orderSnPrefix);
+        long code = scriptResult.code();
         if (code == SeckillRedisUtil.SOLD_OUT) {
             Asserts.fail("商品已售罄");
         }
         if (code == SeckillRedisUtil.LIMIT_EXCEEDED) {
             Asserts.fail("超出限购数量");
         }
+        if (code == SeckillRedisUtil.NOT_STARTED) {
+            Asserts.fail("秒杀活动未开始");
+        }
+        if (code == SeckillRedisUtil.ACTIVITY_ENDED) {
+            Asserts.fail("秒杀活动已结束");
+        }
         if (code != SeckillRedisUtil.SUCCESS) {
             Asserts.fail("抢购失败，请稍后重试");
         }
-        String orderSn = generateOrderSn();
-        redisUtil.setResultObject(SeckillResult.queuing(orderSn), resultExpireSeconds);
-        redisUtil.expireBought(activityId, skuId, expireSeconds);
-
+        String orderSn = scriptResult.orderSn();
         SeckillOrderMessage message = buildMessage(activity, sku, memberId, orderSn);
         orderSender.send(message);
-        LOGGER.info("秒杀抢购成功, orderSn={}, activityId={}, skuId={}, memberId={}",
+        LOGGER.debug("秒杀抢购成功, orderSn={}, activityId={}, skuId={}, memberId={}",
                 orderSn, activityId, skuId, memberId);
         return SeckillResult.queuing(orderSn);
     }
@@ -153,29 +158,44 @@ public class SeckillServiceImpl implements SeckillService {
         return message;
     }
 
+    /**
+     * 活动配置：本地缓存 -> Redis -> DB，逐级回源并回填
+     */
     private SeckillActivity loadActivity(Long activityId) {
-        SeckillActivity activity = redisUtil.getActivity(activityId);
+        SeckillActivity activity = localCache.getActivity(activityId);
         if (activity != null) {
             return activity;
         }
-        activity = seckillDao.selectActivityById(activityId);
+        activity = redisUtil.getActivity(activityId);
+        if (activity == null) {
+            activity = seckillDao.selectActivityById(activityId);
+            if (activity != null) {
+                redisUtil.putActivity(activity, calculateExpireSeconds(activity));
+            }
+        }
         if (activity != null) {
-            redisUtil.putActivity(activity, calculateExpireSeconds(activity));
+            localCache.putActivity(activity);
         }
         return activity;
     }
 
     /**
-     * 商品配置优先读缓存，未命中回源 DB 并回填；后台变更配置时会删除该 key
+     * 商品配置：本地缓存 -> Redis -> DB，逐级回源并回填；后台变更配置时会广播失效本地缓存
      */
     private SeckillSku loadSku(Long activityId, Long skuId, long expireSeconds) {
-        SeckillSku sku = redisUtil.getSku(activityId, skuId);
+        SeckillSku sku = localCache.getSku(activityId, skuId);
         if (sku != null) {
             return sku;
         }
-        sku = seckillDao.selectSku(activityId, skuId);
+        sku = redisUtil.getSku(activityId, skuId);
+        if (sku == null) {
+            sku = seckillDao.selectSku(activityId, skuId);
+            if (sku != null) {
+                redisUtil.putSku(sku, expireSeconds);
+            }
+        }
         if (sku != null) {
-            redisUtil.putSku(sku, expireSeconds);
+            localCache.putSku(sku);
         }
         return sku;
     }
@@ -197,14 +217,5 @@ public class SeckillServiceImpl implements SeckillService {
         long endMillis = activity.getEndTime() == null ? System.currentTimeMillis() : activity.getEndTime().getTime();
         long seconds = (endMillis - System.currentTimeMillis()) / 1000 + AFTER_END_EXTRA_SECONDS;
         return Math.max(seconds, 60L);
-    }
-
-    /**
-     * 订单号：SK + 毫秒级时间戳 + 全局自增序列后四位，保证同一毫秒内也不重复
-     */
-    private String generateOrderSn() {
-        Long sequence = stringRedisTemplate.opsForValue().increment(redisUtil.orderSnIncrKey());
-        long suffix = sequence == null ? 0 : sequence % 10000;
-        return "SK" + LocalDateTime.now().format(ORDER_SN_FORMATTER) + String.format("%04d", suffix);
     }
 }
