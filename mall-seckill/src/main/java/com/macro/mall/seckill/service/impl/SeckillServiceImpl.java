@@ -81,7 +81,7 @@ public class SeckillServiceImpl implements SeckillService {
             Asserts.fail("抢购失败，请稍后重试");
         }
         String orderSn = generateOrderSn();
-        redisUtil.setResult(orderSn, SeckillResult.STATUS_QUEUING, resultExpireSeconds);
+        redisUtil.setResultObject(SeckillResult.queuing(orderSn), resultExpireSeconds);
         redisUtil.expireBought(activityId, skuId, expireSeconds);
 
         SeckillOrderMessage message = buildMessage(activity, sku, memberId, orderSn);

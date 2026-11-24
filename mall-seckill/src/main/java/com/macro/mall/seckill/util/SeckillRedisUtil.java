@@ -2,6 +2,7 @@ package com.macro.mall.seckill.util;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.macro.mall.seckill.domain.SeckillActivity;
+import com.macro.mall.seckill.domain.SeckillResult;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -137,5 +138,51 @@ public class SeckillRedisUtil {
 
     public String getResult(String orderSn) {
         return stringRedisTemplate.opsForValue().get(resultKey(orderSn));
+    }
+
+    /**
+     * 以 JSON 形式写入抢购结果，便于查询接口直接反序列化
+     */
+    public void setResultObject(SeckillResult result, long expireSeconds) {
+        try {
+            String json = objectMapper.writeValueAsString(result);
+            stringRedisTemplate.opsForValue().set(resultKey(result.getOrderSn()), json,
+                    expireSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException("序列化秒杀结果失败", e);
+        }
+    }
+
+    public SeckillResult getResultObject(String orderSn) {
+        String json = getResult(orderSn);
+        if (json == null || !json.startsWith("{")) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, SeckillResult.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public long incrementRetry(String orderSn) {
+        Long value = stringRedisTemplate.opsForValue().increment("seckill:retry:" + orderSn);
+        stringRedisTemplate.expire("seckill:retry:" + orderSn, 1, TimeUnit.HOURS);
+        return value == null ? 0 : value;
+    }
+
+    public void deleteRetry(String orderSn) {
+        stringRedisTemplate.delete("seckill:retry:" + orderSn);
+    }
+
+    /**
+     * 发布失败补偿标记，保证同一条消息只补偿一次
+     *
+     * @return true 表示首次补偿
+     */
+    public boolean markCompensated(String orderSn) {
+        Boolean first = stringRedisTemplate.opsForValue()
+                .setIfAbsent("seckill:compensated:" + orderSn, "1", 1, TimeUnit.HOURS);
+        return Boolean.TRUE.equals(first);
     }
 }
