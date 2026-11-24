@@ -1,0 +1,37 @@
+package com.macro.mall.seckill.controller;
+
+import com.macro.mall.common.api.CommonResult;
+import com.macro.mall.seckill.domain.SeckillActivityDetail;
+import com.macro.mall.seckill.domain.SeckillResult;
+import com.macro.mall.seckill.service.SeckillService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.web.bind.annotation.*;
+
+/**
+ * 秒杀抢购Controller
+ */
+@RestController
+@Tag(name = "SeckillController", description = "秒杀抢购")
+@RequestMapping("/seckill")
+public class SeckillController {
+
+    private final SeckillService seckillService;
+
+    public SeckillController(SeckillService seckillService) {
+        this.seckillService = seckillService;
+    }
+
+    @Operation(summary = "秒杀抢购")
+    @PostMapping("/{activityId}/{skuId}")
+    public CommonResult<SeckillResult> seckill(@PathVariable Long activityId,
+                                               @PathVariable Long skuId) {
+        return CommonResult.success(seckillService.seckill(activityId, skuId));
+    }
+
+    @Operation(summary = "查询秒杀活动详情")
+    @GetMapping("/activity/{activityId}")
+    public CommonResult<SeckillActivityDetail> detail(@PathVariable Long activityId) {
+        return CommonResult.success(seckillService.getActivityDetail(activityId));
+    }
+}
