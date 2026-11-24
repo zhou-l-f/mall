@@ -60,11 +60,12 @@ public class SeckillServiceImpl implements SeckillService {
             Asserts.fail("秒杀活动不存在");
         }
         validateActivityWindow(activity);
-        SeckillSku sku = seckillDao.selectSku(activityId, skuId);
+        long expireSeconds = calculateExpireSeconds(activity);
+        //热路径读 Redis 中的商品配置，避免每个抢购请求都查一次 MySQL
+        SeckillSku sku = loadSku(activityId, skuId, expireSeconds);
         if (sku == null || sku.getStatus() == null || sku.getStatus() != 1) {
             Asserts.fail("秒杀商品不存在或已下架");
         }
-        long expireSeconds = calculateExpireSeconds(activity);
         //冷启动兜底：库存 key 不存在时从 DB 初始化，保证活动开始前未预热也能抢购
         if (redisUtil.getStock(activityId, skuId) == null) {
             redisUtil.initStockIfAbsent(activityId, skuId, sku.getSeckillStock(), expireSeconds);
@@ -162,6 +163,21 @@ public class SeckillServiceImpl implements SeckillService {
             redisUtil.putActivity(activity, calculateExpireSeconds(activity));
         }
         return activity;
+    }
+
+    /**
+     * 商品配置优先读缓存，未命中回源 DB 并回填；后台变更配置时会删除该 key
+     */
+    private SeckillSku loadSku(Long activityId, Long skuId, long expireSeconds) {
+        SeckillSku sku = redisUtil.getSku(activityId, skuId);
+        if (sku != null) {
+            return sku;
+        }
+        sku = seckillDao.selectSku(activityId, skuId);
+        if (sku != null) {
+            redisUtil.putSku(sku, expireSeconds);
+        }
+        return sku;
     }
 
     private void validateActivityWindow(SeckillActivity activity) {

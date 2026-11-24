@@ -64,6 +64,7 @@ public class SeckillPreheatTask {
             }
             for (SeckillSku sku : skus) {
                 if (sku.getStatus() != null && sku.getStatus() == 1) {
+                    redisUtil.putSku(sku, expireSeconds);
                     redisUtil.initStockIfAbsent(activity.getId(), sku.getSkuId(), sku.getSeckillStock(), expireSeconds);
                 }
             }

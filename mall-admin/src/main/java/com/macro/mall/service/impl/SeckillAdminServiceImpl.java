@@ -203,6 +203,7 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
         for (SeckillSku sku : skus) {
             keys.add(stockKey(activityId, sku.getSkuId()));
             keys.add(boughtKey(activityId, sku.getSkuId()));
+            keys.add(skuKey(activityId, sku.getSkuId()));
         }
         try {
             stringRedisTemplate.delete(keys);
@@ -216,6 +217,7 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
             List<String> keys = new ArrayList<>();
             keys.add(stockKey(activityId, skuId));
             keys.add(boughtKey(activityId, skuId));
+            keys.add(skuKey(activityId, skuId));
             stringRedisTemplate.delete(keys);
         } catch (Exception e) {
             LOGGER.warn("清理秒杀商品缓存失败, activityId={}, skuId={}", activityId, skuId, e);
@@ -232,5 +234,9 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
 
     private String boughtKey(Long activityId, Long skuId) {
         return "seckill:bought:{" + activityId + ":" + skuId + "}";
+    }
+
+    private String skuKey(Long activityId, Long skuId) {
+        return "seckill:sku:{" + activityId + ":" + skuId + "}";
     }
 }

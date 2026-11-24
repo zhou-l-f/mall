@@ -3,6 +3,7 @@ package com.macro.mall.seckill.util;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.macro.mall.seckill.domain.SeckillActivity;
 import com.macro.mall.seckill.domain.SeckillResult;
+import com.macro.mall.seckill.domain.SeckillSku;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -44,6 +45,10 @@ public class SeckillRedisUtil {
 
     public String boughtKey(Long activityId, Long skuId) {
         return "seckill:bought:{" + activityId + ":" + skuId + "}";
+    }
+
+    public String skuKey(Long activityId, Long skuId) {
+        return "seckill:sku:{" + activityId + ":" + skuId + "}";
     }
 
     public String resultKey(String orderSn) {
@@ -123,6 +128,35 @@ public class SeckillRedisUtil {
 
     public void deleteActivity(Long activityId) {
         stringRedisTemplate.delete(activityKey(activityId));
+    }
+
+    /**
+     * 写入秒杀商品配置（覆盖写，后台变更配置时删除），抢购热路径直接读缓存避免每请求查库
+     */
+    public void putSku(SeckillSku sku, long expireSeconds) {
+        try {
+            String json = objectMapper.writeValueAsString(sku);
+            stringRedisTemplate.opsForValue().set(skuKey(sku.getActivityId(), sku.getSkuId()), json,
+                    expireSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException("序列化秒杀商品失败", e);
+        }
+    }
+
+    public SeckillSku getSku(Long activityId, Long skuId) {
+        String json = stringRedisTemplate.opsForValue().get(skuKey(activityId, skuId));
+        if (json == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, SeckillSku.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public void deleteSku(Long activityId, Long skuId) {
+        stringRedisTemplate.delete(skuKey(activityId, skuId));
     }
 
     /**

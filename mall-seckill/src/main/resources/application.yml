@@ -9,6 +9,14 @@ spring:
 
 server:
   port: 8086
+  tomcat:
+    # 抢购为短耗时请求，默认 200 线程在 500 并发时即封顶，按压测建议上调
+    threads:
+      max: 500
+      min-spare: 100
+    # 等待队列与最大连接数，避免高并发下直接拒绝连接
+    accept-count: 1000
+    max-connections: 10000
 
 mybatis:
   mapper-locations:
