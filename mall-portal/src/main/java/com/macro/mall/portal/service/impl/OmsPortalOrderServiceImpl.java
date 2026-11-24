@@ -421,10 +421,13 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
                 continue;
             }
             count++;
-            //解除订单商品库存锁定
-            portalOrderDao.releaseSkuStockLock(timeOutOrder.getOrderItemList());
-            //秒杀订单额外回补秒杀库存与 Redis 预占
-            rollbackSeckillStock(timeOutOrder, timeOutOrder.getOrderItemList());
+            if (isSeckillOrder(timeOutOrder)) {
+                //秒杀订单保留 pms 库存锁定，仅回补秒杀库存与 Redis 预占
+                rollbackSeckillStock(timeOutOrder, timeOutOrder.getOrderItemList());
+            } else {
+                //解除订单商品库存锁定
+                portalOrderDao.releaseSkuStockLock(timeOutOrder.getOrderItemList());
+            }
             //修改优惠券使用状态
             updateCouponStatus(timeOutOrder.getCouponId(), timeOutOrder.getMemberId(), 0);
             //返还使用积分
@@ -447,12 +450,13 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         OmsOrderItemExample orderItemExample = new OmsOrderItemExample();
         orderItemExample.createCriteria().andOrderIdEqualTo(orderId);
         List<OmsOrderItem> orderItemList = orderItemMapper.selectByExample(orderItemExample);
-        //解除订单商品库存锁定
-        if (!CollectionUtils.isEmpty(orderItemList)) {
+        if (isSeckillOrder(cancelOrder)) {
+            //秒杀订单保留 pms 库存锁定，仅回补秒杀库存与 Redis 预占
+            rollbackSeckillStock(cancelOrder, orderItemList);
+        } else if (!CollectionUtils.isEmpty(orderItemList)) {
+            //解除订单商品库存锁定
             portalOrderDao.releaseSkuStockLock(orderItemList);
         }
-        //秒杀订单额外回补秒杀库存与 Redis 预占
-        rollbackSeckillStock(cancelOrder, orderItemList);
         //修改优惠券使用状态
         updateCouponStatus(cancelOrder.getCouponId(), cancelOrder.getMemberId(), 0);
         //返还使用积分
@@ -464,13 +468,19 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     }
 
     /**
+     * 是否秒杀订单（order_type=1）
+     */
+    private boolean isSeckillOrder(OmsOrder order) {
+        return order != null && order.getOrderType() != null && order.getOrderType() == 1;
+    }
+
+    /**
      * 秒杀订单取消/超时关闭时回补库存：
-     * 1. 数据库秒杀库存 seckill_stock 增加（pms_sku_stock 的 lock_stock 已由 releaseSkuStockLock 释放）
+     * 1. 秒杀订单创建时已从 pms_sku_stock 预锁定库存，取消后保留锁定，仅回补 seckill_stock，保证再次售出后仍可支付
      * 2. Redis 预占库存增加、会员限购计数减少，使该商品可再次被抢购
      */
     private void rollbackSeckillStock(OmsOrder order, List<OmsOrderItem> orderItemList) {
-        if (order == null || order.getOrderType() == null || order.getOrderType() != 1
-                || CollectionUtils.isEmpty(orderItemList) || order.getPromotionInfo() == null) {
+        if (!isSeckillOrder(order) || CollectionUtils.isEmpty(orderItemList) || order.getPromotionInfo() == null) {
             return;
         }
         Long activityId;
