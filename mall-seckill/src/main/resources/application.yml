@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: mall-seckill
+  profiles:
+    active: dev #默认为开发环境
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+
+server:
+  port: 8086
+
+mybatis:
+  mapper-locations:
+    - classpath:dao/*.xml
+    - classpath*:com/**/mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+jwt:
+  tokenHeader: Authorization #JWT存储的请求头
+  secret: mall-portal-secret #与 mall-portal 保持一致，复用同一套 token
+  expiration: 604800 #JWT的超期限时间(60*60*24*7)
+  tokenHead: 'Bearer '
+
+secure:
+  ignored:
+    urls: #安全路径白名单
+      - /swagger-ui/
+      - /v3/api-docs/*
+      - /actuator/**
+      - /druid/**
+      - /favicon.ico
+
+# 秒杀业务配置
+seckill:
+  preheat:
+    # 提前预热的分钟数
+    ahead-minutes: 5
+    # 预热任务执行间隔（毫秒）
+    interval-ms: 10000
+    # 单批最大活动数
+    batch-size: 50
+  # 抢购结果标记过期时间（秒），默认 24 小时
+  result-expire-seconds: 86400
+  # 单个会员信息缓存时间（秒）
+  member-cache-seconds: 3600

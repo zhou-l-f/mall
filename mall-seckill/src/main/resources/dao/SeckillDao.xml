@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.macro.mall.seckill.dao.SeckillDao">
+
+    <resultMap id="activityMap" type="com.macro.mall.seckill.domain.SeckillActivity">
+        <id column="id" property="id"/>
+        <result column="name" property="name"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="status" property="status"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+
+    <resultMap id="skuMap" type="com.macro.mall.seckill.domain.SeckillSku">
+        <id column="id" property="id"/>
+        <result column="activity_id" property="activityId"/>
+        <result column="sku_id" property="skuId"/>
+        <result column="product_id" property="productId"/>
+        <result column="seckill_price" property="seckillPrice"/>
+        <result column="seckill_stock" property="seckillStock"/>
+        <result column="limit_count" property="limitCount"/>
+        <result column="status" property="status"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+
+    <select id="selectActivityById" resultMap="activityMap">
+        SELECT id, name, start_time, end_time, status, create_time, update_time
+        FROM sms_seckill_activity
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectActivitiesForPreheat" resultMap="activityMap">
+        SELECT id, name, start_time, end_time, status, create_time, update_time
+        FROM sms_seckill_activity
+        WHERE status &lt;&gt; 2
+          AND end_time &gt; #{now}
+          AND start_time &lt;= DATE_ADD(#{now}, INTERVAL #{aheadMinutes} MINUTE)
+        ORDER BY start_time
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectSkusByActivityId" resultMap="skuMap">
+        SELECT id, activity_id, sku_id, product_id, seckill_price, seckill_stock,
+               limit_count, status, create_time, update_time
+        FROM sms_seckill_sku
+        WHERE activity_id = #{activityId}
+        ORDER BY id
+    </select>
+
+    <select id="selectSku" resultMap="skuMap">
+        SELECT id, activity_id, sku_id, product_id, seckill_price, seckill_stock,
+               limit_count, status, create_time, update_time
+        FROM sms_seckill_sku
+        WHERE activity_id = #{activityId}
+          AND sku_id = #{skuId}
+    </select>
+
+    <update id="deductSeckillStock">
+        UPDATE sms_seckill_sku
+        SET seckill_stock = seckill_stock - #{quantity},
+            update_time = NOW()
+        WHERE id = #{id}
+          AND seckill_stock &gt;= #{quantity}
+    </update>
+
+    <update id="restoreSeckillStock">
+        UPDATE sms_seckill_sku
+        SET seckill_stock = seckill_stock + #{quantity},
+            update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <select id="countOrderBySn" resultType="int">
+        SELECT COUNT(*)
+        FROM oms_order
+        WHERE order_sn = #{orderSn}
+    </select>
+
+    <select id="selectOrderBySn" resultType="com.macro.mall.model.OmsOrder">
+        SELECT *
+        FROM oms_order
+        WHERE order_sn = #{orderSn}
+        LIMIT 1
+    </select>
+
+</mapper>
