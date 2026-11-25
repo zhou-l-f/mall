@@ -41,6 +41,14 @@
         LIMIT #{limit}
     </select>
 
+    <select id="selectAvailableActivities" resultMap="activityMap">
+        SELECT id, name, start_time, end_time, status, create_time, update_time
+        FROM sms_seckill_activity
+        WHERE status &lt;&gt; 2
+          AND end_time &gt; #{now}
+        ORDER BY start_time
+    </select>
+
     <select id="selectSkusByActivityId" resultMap="skuMap">
         SELECT id, activity_id, sku_id, product_id, seckill_price, seckill_stock,
                limit_count, status, create_time, update_time

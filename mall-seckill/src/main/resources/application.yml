@@ -53,5 +53,7 @@ seckill:
   result-expire-seconds: 86400
   # 活动/商品配置进程内缓存时间（秒）
   local-cache-seconds: 60
+  # 前台活动列表、活动下商品列表的 Redis 缓存时间（秒），后台配置变更时会主动删除
+  list-cache-seconds: 30
   # 单个会员信息缓存时间（秒）
   member-cache-seconds: 3600

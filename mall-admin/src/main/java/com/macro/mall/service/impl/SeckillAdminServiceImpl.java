@@ -47,7 +47,9 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
         activity.setStatus(activity.getStatus() == null ? 0 : activity.getStatus());
         activity.setCreateTime(new Date());
         activity.setUpdateTime(new Date());
-        return seckillAdminDao.insertActivity(activity);
+        int count = seckillAdminDao.insertActivity(activity);
+        deleteActivityListCache();
+        return count;
     }
 
     @Override
@@ -206,6 +208,8 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
     private void clearActivityKeys(Long activityId) {
         List<String> keys = new ArrayList<>();
         keys.add(activityKey(activityId));
+        keys.add(activityListKey());
+        keys.add(skuListKey(activityId));
         List<SeckillSku> skus = seckillAdminDao.selectSkuList(activityId);
         for (SeckillSku sku : skus) {
             keys.add(stockKey(activityId, sku.getSkuId()));
@@ -226,10 +230,22 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
             keys.add(stockKey(activityId, skuId));
             keys.add(boughtKey(activityId, skuId));
             keys.add(skuKey(activityId, skuId));
+            keys.add(skuListKey(activityId));
             stringRedisTemplate.delete(keys);
             publishRefresh("S:" + activityId + ":" + skuId);
         } catch (Exception e) {
             LOGGER.warn("清理秒杀商品缓存失败, activityId={}, skuId={}", activityId, skuId, e);
+        }
+    }
+
+    /**
+     * 删除前台活动列表缓存，新增活动后立即可见
+     */
+    private void deleteActivityListCache() {
+        try {
+            stringRedisTemplate.delete(activityListKey());
+        } catch (Exception e) {
+            LOGGER.warn("清理秒杀活动列表缓存失败", e);
         }
     }
 
@@ -270,5 +286,13 @@ public class SeckillAdminServiceImpl implements SeckillAdminService {
 
     private String skuKey(Long activityId, Long skuId) {
         return "seckill:sku:{" + activityId + ":" + skuId + "}";
+    }
+
+    private String activityListKey() {
+        return "seckill:activity:list";
+    }
+
+    private String skuListKey(Long activityId) {
+        return "seckill:sku:list:{" + activityId + "}";
     }
 }

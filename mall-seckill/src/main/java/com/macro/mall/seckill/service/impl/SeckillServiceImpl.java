@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -38,6 +39,9 @@ public class SeckillServiceImpl implements SeckillService {
 
     @Value("${seckill.result-expire-seconds:86400}")
     private long resultExpireSeconds;
+
+    @Value("${seckill.list-cache-seconds:30}")
+    private long listCacheSeconds;
 
     public SeckillServiceImpl(SeckillDao seckillDao, SeckillRedisUtil redisUtil, SeckillLocalCache localCache,
                               SeckillMemberService memberService, SeckillOrderSender orderSender) {
@@ -105,6 +109,36 @@ public class SeckillServiceImpl implements SeckillService {
         LOGGER.debug("秒杀抢购成功, orderSn={}, activityId={}, skuId={}, memberId={}",
                 orderSn, activityId, skuId, memberId);
         return SeckillResult.queuing(orderSn);
+    }
+
+    @Override
+    public List<SeckillActivity> listActivities() {
+        List<SeckillActivity> cached = redisUtil.getActivityListCache();
+        if (cached != null) {
+            return cached;
+        }
+        List<SeckillActivity> activities = seckillDao.selectAvailableActivities(new Date());
+        redisUtil.putActivityListCache(activities, listCacheSeconds);
+        return activities;
+    }
+
+    @Override
+    public List<SeckillSku> listSkus(Long activityId) {
+        List<SeckillSku> cached = redisUtil.getSkuListCache(activityId);
+        if (cached != null) {
+            return cached;
+        }
+        List<SeckillSku> enabled = new ArrayList<>();
+        List<SeckillSku> skus = seckillDao.selectSkusByActivityId(activityId);
+        if (skus != null) {
+            for (SeckillSku sku : skus) {
+                if (sku.getStatus() != null && sku.getStatus() == 1) {
+                    enabled.add(sku);
+                }
+            }
+        }
+        redisUtil.putSkuListCache(activityId, enabled, listCacheSeconds);
+        return enabled;
     }
 
     @Override

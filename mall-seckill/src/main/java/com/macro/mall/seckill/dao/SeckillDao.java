@@ -30,6 +30,13 @@ public interface SeckillDao {
                                                      @Param("limit") int limit);
 
     /**
+     * 查询前台展示用活动列表（未结束的活动，按开始时间排序）
+     *
+     * @param now 当前时间
+     */
+    List<SeckillActivity> selectAvailableActivities(@Param("now") Date now);
+
+    /**
      * 查询活动下的秒杀商品
      */
     List<SeckillSku> selectSkusByActivityId(@Param("activityId") Long activityId);

@@ -1,5 +1,6 @@
 package com.macro.mall.seckill.util;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.macro.mall.seckill.domain.SeckillActivity;
 import com.macro.mall.seckill.domain.SeckillResult;
@@ -15,6 +16,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -217,6 +219,70 @@ public class SeckillRedisUtil {
      */
     public void deleteStockAndBought(Long activityId, Long skuId) {
         stringRedisTemplate.delete(Arrays.asList(stockKey(activityId, skuId), boughtKey(activityId, skuId)));
+    }
+
+    /**
+     * 前台活动列表缓存 key，后台配置变更时删除
+     */
+    public String activityListKey() {
+        return "seckill:activity:list";
+    }
+
+    /**
+     * 前台活动下商品列表缓存 key，后台配置变更时删除
+     */
+    public String skuListKey(Long activityId) {
+        return "seckill:sku:list:{" + activityId + "}";
+    }
+
+    /**
+     * 读取活动列表缓存，未命中或反序列化失败返回 null
+     */
+    public List<SeckillActivity> getActivityListCache() {
+        String json = stringRedisTemplate.opsForValue().get(activityListKey());
+        if (json == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<SeckillActivity>>() {
+            });
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public void putActivityListCache(List<SeckillActivity> activities, long expireSeconds) {
+        try {
+            stringRedisTemplate.opsForValue().set(activityListKey(),
+                    objectMapper.writeValueAsString(activities), expireSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException("序列化秒杀活动列表失败", e);
+        }
+    }
+
+    /**
+     * 读取活动下商品列表缓存，未命中或反序列化失败返回 null
+     */
+    public List<SeckillSku> getSkuListCache(Long activityId) {
+        String json = stringRedisTemplate.opsForValue().get(skuListKey(activityId));
+        if (json == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<SeckillSku>>() {
+            });
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public void putSkuListCache(Long activityId, List<SeckillSku> skus, long expireSeconds) {
+        try {
+            stringRedisTemplate.opsForValue().set(skuListKey(activityId),
+                    objectMapper.writeValueAsString(skus), expireSeconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException("序列化秒杀商品列表失败", e);
+        }
     }
 
     public void setResult(String orderSn, String value, long expireSeconds) {
