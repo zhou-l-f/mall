@@ -73,17 +73,35 @@ public class SeckillServiceImpl implements SeckillService {
         int limitCount = sku.getLimitCount() == null ? 1 : sku.getLimitCount();
         String orderSnPrefix = "SK" + LocalDateTime.now().format(ORDER_SN_FORMATTER);
         //活动窗口校验、库存预检、限购校验、扣减、订单号生成、结果写入在一次 Lua 往返内完成
-        SeckillRedisUtil.SeckillScriptResult scriptResult = redisUtil.executeSeckill(activityId, skuId, memberId,
-                limitCount, sku.getSeckillStock(), expireSeconds, resultExpireSeconds,
-                nowMillis, startMillis, endMillis, orderSnPrefix);
+        String requestId = UUID.randomUUID().toString().replace("-", "");
+        SeckillRedisUtil.SeckillScriptResult scriptResult;
+        try {
+            scriptResult = redisUtil.executeSeckill(activityId, skuId, memberId, limitCount,
+                    sku.getSeckillStock(), expireSeconds, resultExpireSeconds,
+                    nowMillis, startMillis, endMillis, orderSnPrefix, requestId);
+        } catch (Exception e) {
+            //超时等异常下脚本可能已在 Redis 执行完，按请求标记恢复订单号，避免库存永久损耗
+            String recoveredOrderSn = recoverOrderSn(requestId, e);
+            if (recoveredOrderSn == null) {
+                return SeckillResult.failed("抢购失败，请稍后重试");
+            }
+            scriptResult = new SeckillRedisUtil.SeckillScriptResult(SeckillRedisUtil.SUCCESS, recoveredOrderSn);
+        }
         long code = scriptResult.code();
         if (code != SeckillRedisUtil.SUCCESS) {
             //售罄、限购等属于预期内高频结果，直接返回失败对象，不抛异常避免栈填充开销
             return SeckillResult.failed(scriptFailMessage(code));
         }
         String orderSn = scriptResult.orderSn();
-        SeckillOrderMessage message = buildMessage(activity, sku, memberId, orderSn);
-        orderSender.send(message);
+        try {
+            SeckillOrderMessage message = buildMessage(activity, sku, memberId, orderSn);
+            orderSender.send(message);
+        } catch (Exception e) {
+            //库存已在 Lua 内扣减，同步投递异常不会触发 confirm 回调，这里兜底回补，避免库存永久损耗
+            LOGGER.error("秒杀订单消息投递失败，回补库存, orderSn={}, error={}", orderSn, e.toString());
+            orderSender.compensate(orderSn, activityId, skuId, memberId, 1);
+            return SeckillResult.failed("抢购失败，请稍后重试");
+        }
         LOGGER.debug("秒杀抢购成功, orderSn={}, activityId={}, skuId={}, memberId={}",
                 orderSn, activityId, skuId, memberId);
         return SeckillResult.queuing(orderSn);
@@ -190,6 +208,33 @@ public class SeckillServiceImpl implements SeckillService {
             localCache.putSku(sku);
         }
         return sku;
+    }
+
+    /**
+     * 脚本结果未知时按请求标记恢复订单号，标记不存在说明脚本未执行、未产生扣减
+     * 客户端超时不会取消已发出的命令，短暂轮询避免命令稍后才执行导致漏判
+     */
+    private String recoverOrderSn(String requestId, Exception cause) {
+        for (int i = 0; i < 3; i++) {
+            try {
+                String orderSn = redisUtil.getScriptOrderSn(requestId);
+                if (orderSn != null) {
+                    LOGGER.warn("秒杀脚本已执行但响应异常，按恢复出的订单号继续投递, orderSn={}, error={}",
+                            orderSn, cause.toString());
+                    return orderSn;
+                }
+            } catch (Exception e) {
+                LOGGER.warn("恢复秒杀请求结果失败, requestId={}, error={}", requestId, e.toString());
+            }
+            try {
+                Thread.sleep(200L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        LOGGER.warn("秒杀脚本执行异常且未产生扣减, requestId={}, error={}", requestId, cause.toString());
+        return null;
     }
 
     /**

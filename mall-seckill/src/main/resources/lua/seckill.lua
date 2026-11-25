@@ -12,6 +12,9 @@
 -- ARGV[8] = 活动结束毫秒（0 表示不限制）
 -- ARGV[9] = 订单号前缀（SK + 毫秒级时间）
 -- ARGV[10] = 抢购结果 key 前缀
+-- ARGV[11] = 请求唯一标识（客户端生成，超时后用于判断脚本是否已执行）
+-- ARGV[12] = 请求标记 key 前缀
+-- ARGV[13] = 请求标记过期秒数
 local now = tonumber(ARGV[6])
 local startMs = tonumber(ARGV[7])
 local endMs = tonumber(ARGV[8])
@@ -44,4 +47,6 @@ local seq = redis.call('incr', KEYS[3])
 local orderSn = ARGV[9] .. string.format('%04d', seq % 10000)
 redis.call('set', ARGV[10] .. orderSn,
         '{"status":"QUEUING","orderSn":"' .. orderSn .. '"}', 'EX', tonumber(ARGV[5]))
+-- 写入请求标记：客户端超时未拿到响应时，可据此判断扣减是否已发生并恢复订单号
+redis.call('set', ARGV[12] .. ARGV[11], orderSn, 'EX', tonumber(ARGV[13]))
 return '1|' .. orderSn

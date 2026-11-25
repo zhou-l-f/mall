@@ -36,6 +36,11 @@ public class SeckillRedisUtil {
      */
     public static final String CONFIG_REFRESH_CHANNEL = "seckill:config:refresh";
 
+    /**
+     * 请求标记保留时长：只需覆盖客户端超时判定窗口
+     */
+    private static final long REQUEST_MARKER_SECONDS = 30L;
+
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final RedisScript<String> seckillScript;
@@ -83,6 +88,17 @@ public class SeckillRedisUtil {
         return "seckill:orderSn:incr";
     }
 
+    public String requestMarkerPrefix() {
+        return "seckill:req:";
+    }
+
+    /**
+     * 读取请求标记：脚本执行成功时写入订单号，返回 null 表示扣减未发生
+     */
+    public String getScriptOrderSn(String requestId) {
+        return stringRedisTemplate.opsForValue().get(requestMarkerPrefix() + requestId);
+    }
+
     /**
      * 一次往返完成：活动窗口校验、库存预检、限购校验、扣减、订单号生成、结果写入
      *
@@ -91,13 +107,15 @@ public class SeckillRedisUtil {
     public SeckillScriptResult executeSeckill(Long activityId, Long skuId, Long memberId, int limitCount,
                                               Integer initialStock, long activityExpireSeconds,
                                               long resultExpireSeconds, long nowMillis,
-                                              long startMillis, long endMillis, String orderSnPrefix) {
+                                              long startMillis, long endMillis, String orderSnPrefix,
+                                              String requestId) {
         String result = stringRedisTemplate.execute(seckillScript,
                 Arrays.asList(stockKey(activityId, skuId), boughtKey(activityId, skuId), orderSnIncrKey()),
                 String.valueOf(limitCount), String.valueOf(memberId), String.valueOf(initialStock),
                 String.valueOf(activityExpireSeconds), String.valueOf(resultExpireSeconds),
                 String.valueOf(nowMillis), String.valueOf(startMillis), String.valueOf(endMillis),
-                orderSnPrefix, resultKeyPrefix());
+                orderSnPrefix, resultKeyPrefix(), requestId, requestMarkerPrefix(),
+                String.valueOf(REQUEST_MARKER_SECONDS));
         if (result == null) {
             return new SeckillScriptResult(SCRIPT_ERROR, null);
         }
@@ -124,8 +142,16 @@ public class SeckillRedisUtil {
         stringRedisTemplate.opsForValue().increment(stockKey(activityId, skuId), quantity);
     }
 
+    /**
+     * 回补限购计数，计数归零后直接删除字段，避免补偿后残留 0 值成员
+     */
     public void decrBought(Long activityId, Long skuId, Long memberId, int quantity) {
-        stringRedisTemplate.opsForHash().increment(boughtKey(activityId, skuId), String.valueOf(memberId), -quantity);
+        String key = boughtKey(activityId, skuId);
+        String field = String.valueOf(memberId);
+        Long value = stringRedisTemplate.opsForHash().increment(key, field, -quantity);
+        if (value != null && value <= 0) {
+            stringRedisTemplate.opsForHash().delete(key, field);
+        }
     }
 
     /**

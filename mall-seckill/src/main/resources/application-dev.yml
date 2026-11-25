@@ -18,7 +18,7 @@ spring:
       database: 0 #本地单节点，通过 seckill: 前缀与 portal 隔离
       port: 6379
       password:
-      timeout: 300ms
+      timeout: 2000ms #300ms 在突发流量下会大量超时，且超时后脚本可能已执行
       lettuce:
         pool:
           max-active: 100
@@ -45,4 +45,4 @@ spring:
 logging:
   level:
     root: info
-    com.macro.mall: info
+    com.macro.mall: WARN

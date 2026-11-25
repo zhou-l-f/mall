@@ -57,6 +57,24 @@ public class SeckillOrderSender {
     }
 
     /**
+     * 投递失败补偿（幂等）：回补 Redis 库存与限购计数，结果标记为失败
+     * 同步发送异常与 Broker 未确认两条路径共用，避免重复回补
+     */
+    public void compensate(String orderSn, Long activityId, Long skuId, Long memberId, int quantity) {
+        try {
+            if (!redisUtil.markCompensated(orderSn)) {
+                return;
+            }
+            redisUtil.incrStock(activityId, skuId, quantity);
+            redisUtil.decrBought(activityId, skuId, memberId, quantity);
+            redisUtil.setResultObject(SeckillResult.failed(orderSn, "消息投递失败"), resultExpireSeconds);
+            LOGGER.warn("秒杀消息投递失败，已回补库存, orderSn={}, quantity={}", orderSn, quantity);
+        } catch (Exception e) {
+            LOGGER.error("秒杀消息投递失败补偿异常, orderSn={}", orderSn, e);
+        }
+    }
+
+    /**
      * 发布失败：回补 Redis 库存与限购计数，结果标记为失败
      */
     private void compensatePublishFailure(String correlationId) {
@@ -65,20 +83,10 @@ public class SeckillOrderSender {
             if (parts.length < 5) {
                 return;
             }
-            String orderSn = parts[0];
-            if (!redisUtil.markCompensated(orderSn)) {
-                return;
-            }
-            Long activityId = Long.valueOf(parts[1]);
-            Long skuId = Long.valueOf(parts[2]);
-            Long memberId = Long.valueOf(parts[3]);
-            int quantity = Integer.parseInt(parts[4]);
-            redisUtil.incrStock(activityId, skuId, quantity);
-            redisUtil.decrBought(activityId, skuId, memberId, quantity);
-            redisUtil.setResultObject(SeckillResult.failed(orderSn, "消息投递失败"), resultExpireSeconds);
-            LOGGER.warn("秒杀消息投递失败，已回补库存, orderSn={}, quantity={}", orderSn, quantity);
+            compensate(parts[0], Long.valueOf(parts[1]), Long.valueOf(parts[2]),
+                    Long.valueOf(parts[3]), Integer.parseInt(parts[4]));
         } catch (Exception e) {
-            LOGGER.error("秒杀消息投递失败补偿异常, correlationId={}", correlationId, e);
+            LOGGER.error("解析秒杀消息补偿信息异常, correlationId={}", correlationId, e);
         }
     }
 }
