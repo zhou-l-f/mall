@@ -149,7 +149,7 @@ public class SeckillRedisUtil {
         String key = boughtKey(activityId, skuId);
         String field = String.valueOf(memberId);
         Long value = stringRedisTemplate.opsForHash().increment(key, field, -quantity);
-        if (value != null && value <= 0) {
+        if (value <= 0) {
             stringRedisTemplate.opsForHash().delete(key, field);
         }
     }
